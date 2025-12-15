@@ -65,6 +65,7 @@ sudo systemctl restart NetworkManager
 
 #### Install Build Dependencies
 
+**Ubuntu/Debian:**
 ```bash
 sudo apt install meson ninja-build gcc \
     libnm-dev libgtk-4-dev libadwaita-1-dev \
@@ -73,11 +74,20 @@ sudo apt install meson ninja-build gcc \
     gir1.2-gtk-4.0 openconnect git
 ```
 
+**Fedora:**
+```bash
+sudo dnf install meson ninja-build gcc \
+    NetworkManager-libnm-devel gtk4-devel libadwaita-devel \
+    webkitgtk6.0-devel libsecret-devel \
+    python3-devel python3-pip python3-gobject \
+    openconnect git
+```
+
 #### Quick Build
 
 ```bash
-git clone https://github.com/yourusername/gnome-vpn-sso.git
-cd gnome-vpn-sso
+git clone https://github.com/FHNW-Security-Lab/Gnome-VPN.git
+cd Gnome-VPN
 ./build.sh
 sudo meson install -C builddir
 ```
@@ -299,7 +309,7 @@ Contributions are welcome! Please follow these guidelines:
 
 ### Development Setup
 
-See the [Development Notes](CLAUDE.md#development-notes) in `CLAUDE.md` for detailed development information.
+For development, clone the repository and install build dependencies as shown above. Use `meson setup builddir` to configure, then `meson compile -C builddir` to build.
 
 ### Code Style
 
@@ -365,15 +375,14 @@ Special thanks to the GNOME and NetworkManager communities for their comprehensi
 
 ## Resources
 
-- **Documentation**: [CLAUDE.md](CLAUDE.md) - Detailed project plan and architecture
 - **NetworkManager VPN Plugins**: [GNOME GitLab](https://gitlab.gnome.org/GNOME)
 - **OpenConnect Documentation**: [https://www.infradead.org/openconnect/](https://www.infradead.org/openconnect/)
 - **GNOME Human Interface Guidelines**: [https://developer.gnome.org/hig/](https://developer.gnome.org/hig/)
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/gnome-vpn-sso/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/gnome-vpn-sso/discussions)
+- **Issues**: [GitHub Issues](https://github.com/FHNW-Security-Lab/Gnome-VPN/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/FHNW-Security-Lab/Gnome-VPN/discussions)
 
 ---
 

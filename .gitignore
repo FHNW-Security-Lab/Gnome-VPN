@@ -154,3 +154,6 @@ docs/latex/
 
 # pkg-config
 *.pc
+
+# AI assistant files (keep locally, not in repo)
+CLAUDE.md
