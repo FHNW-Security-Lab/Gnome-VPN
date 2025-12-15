@@ -299,34 +299,57 @@ parse_sso_cookie (NmVpnSsoService *self, const char *output)
     NmVpnSsoServicePrivate *priv = self->priv;
     const char *cookie_start, *cookie_end;
 
-    /* For GlobalProtect, gp-saml-gui outputs the cookie on a line like:
-     * SAML={prelogin-cookie-value}
-     * or just the cookie value directly
+    /* For GlobalProtect, gp-saml-gui outputs credentials in this format:
+     * HOST=https://vpn.example.com/globalprotect
+     * USER=username
+     * COOKIE=<prelogin-cookie-value>
+     * OS=linux-64
      */
 
     if (g_strcmp0 (priv->protocol, NM_VPN_SSO_PROTOCOL_GP) == 0) {
-        cookie_start = strstr (output, "SAML=");
+        /* Look for COOKIE= (gp-saml-gui standard output format) */
+        cookie_start = strstr (output, "COOKIE=");
         if (cookie_start) {
-            cookie_start += 5; /* Skip "SAML=" */
+            cookie_start += 7; /* Skip "COOKIE=" */
             cookie_end = strchr (cookie_start, '\n');
             if (cookie_end) {
                 g_free (priv->sso_cookie);
                 priv->sso_cookie = g_strndup (cookie_start, cookie_end - cookie_start);
-                g_message ("Extracted SSO cookie: %s", priv->sso_cookie);
+            } else {
+                /* No newline - cookie goes to end of string */
+                g_free (priv->sso_cookie);
+                priv->sso_cookie = g_strdup (cookie_start);
             }
-        } else {
-            /* Try to extract the last non-empty line as the cookie */
-            char **lines = g_strsplit (output, "\n", -1);
-            for (int i = g_strv_length (lines) - 1; i >= 0; i--) {
-                g_strstrip (lines[i]);
-                if (strlen (lines[i]) > 0) {
+
+            /* gp-saml-gui uses shlex.quote() which may add single quotes around
+             * values with shell special characters - strip them if present */
+            if (priv->sso_cookie && priv->sso_cookie[0] == '\'') {
+                gsize len = strlen (priv->sso_cookie);
+                if (len > 1 && priv->sso_cookie[len - 1] == '\'') {
+                    gchar *unquoted = g_strndup (priv->sso_cookie + 1, len - 2);
                     g_free (priv->sso_cookie);
-                    priv->sso_cookie = g_strdup (lines[i]);
-                    g_message ("Extracted SSO cookie from last line: %s", priv->sso_cookie);
-                    break;
+                    priv->sso_cookie = unquoted;
                 }
             }
-            g_strfreev (lines);
+            g_message ("Extracted GlobalProtect cookie: %s", priv->sso_cookie);
+        } else {
+            /* Fallback: look for prelogin-cookie= format (alternative output) */
+            cookie_start = strstr (output, "prelogin-cookie=");
+            if (cookie_start) {
+                cookie_start += 16; /* Skip "prelogin-cookie=" */
+                cookie_end = strchr (cookie_start, '\n');
+                if (cookie_end) {
+                    g_free (priv->sso_cookie);
+                    priv->sso_cookie = g_strndup (cookie_start, cookie_end - cookie_start);
+                } else {
+                    g_free (priv->sso_cookie);
+                    priv->sso_cookie = g_strdup (cookie_start);
+                }
+                g_message ("Extracted GlobalProtect cookie (prelogin-cookie format): %s", priv->sso_cookie);
+            } else {
+                g_warning ("GlobalProtect: No cookie found in SSO output. Expected COOKIE= or prelogin-cookie=");
+                g_warning ("SSO output was: %s", output);
+            }
         }
     } else if (g_strcmp0 (priv->protocol, NM_VPN_SSO_PROTOCOL_AC) == 0) {
         /* For AnyConnect, openconnect-sso --authenticate outputs:
