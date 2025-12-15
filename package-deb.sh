@@ -36,6 +36,7 @@ check_dependencies() {
 clean_previous_builds() {
     echo "Cleaning previous builds..."
     rm -f ../*.deb ../*.changes ../*.buildinfo ../*.dsc
+    rm -f ./*.deb ./*.changes ./*.buildinfo ./*.dsc
     rm -rf debian/.debhelper debian/gnome-vpn-sso debian/files debian/debhelper-build-stamp
     rm -rf obj-x86_64-linux-gnu
     echo "Done."
@@ -54,16 +55,20 @@ build_package() {
     echo "Build complete!"
 }
 
-# Move .deb to project root
+# Move build artifacts to project root
 move_package() {
     echo ""
-    echo "Moving .deb package to project root..."
+    echo "Moving build artifacts to project root..."
 
-    DEB_FILE=$(ls -t ../*.deb 2>/dev/null | head -n1)
+    # Move all build artifacts to current directory
+    mv ../*.deb . 2>/dev/null || true
+    mv ../*.changes . 2>/dev/null || true
+    mv ../*.buildinfo . 2>/dev/null || true
+
+    DEB_FILE=$(ls -t ./*.deb 2>/dev/null | head -n1)
 
     if [ -n "$DEB_FILE" ]; then
-        mv "$DEB_FILE" .
-        echo "Package moved: $(basename "$DEB_FILE")"
+        echo "Package ready: $(basename "$DEB_FILE")"
         echo ""
         echo "=========================================="
         echo "SUCCESS! Package ready for installation:"
