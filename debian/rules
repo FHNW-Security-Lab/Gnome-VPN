@@ -29,6 +29,19 @@ override_dh_auto_install:
 	@echo "Installing openconnect-sso into bundled venv..."
 	debian/gnome-vpn-sso$(VENV_DIR)/bin/pip install --no-cache-dir --no-deps --ignore-installed openconnect-sso
 
+	# Install dependencies for external browser support
+	@echo "Installing external browser dependencies..."
+	debian/gnome-vpn-sso$(VENV_DIR)/bin/pip install --no-cache-dir websockets aiohttp
+
+	# Apply external browser patches to openconnect-sso
+	@echo "Applying external browser patches to openconnect-sso..."
+	PYVER=$$(ls debian/gnome-vpn-sso$(VENV_DIR)/lib/ | grep python | head -1) && \
+	cp src/deps/openconnect-sso-patches/cli_patch.py debian/gnome-vpn-sso$(VENV_DIR)/lib/$$PYVER/site-packages/openconnect_sso/cli.py && \
+	cp src/deps/openconnect-sso-patches/app_patch.py debian/gnome-vpn-sso$(VENV_DIR)/lib/$$PYVER/site-packages/openconnect_sso/app.py && \
+	cp src/deps/openconnect-sso-patches/authenticator_patch.py debian/gnome-vpn-sso$(VENV_DIR)/lib/$$PYVER/site-packages/openconnect_sso/authenticator.py && \
+	cp src/deps/openconnect-sso-patches/saml_authenticator_patch.py debian/gnome-vpn-sso$(VENV_DIR)/lib/$$PYVER/site-packages/openconnect_sso/saml_authenticator.py && \
+	cp src/deps/openconnect-sso-patches/external_browser.py debian/gnome-vpn-sso$(VENV_DIR)/lib/$$PYVER/site-packages/openconnect_sso/external_browser.py
+
 	@echo "Installing gp-saml-gui into bundled venv..."
 	debian/gnome-vpn-sso$(VENV_DIR)/bin/pip install --no-cache-dir --no-deps --ignore-installed \
 		https://github.com/dlenski/gp-saml-gui/archive/master.zip

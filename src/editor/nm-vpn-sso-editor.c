@@ -32,6 +32,7 @@ struct _NmVpnSsoEditor {
     GtkWidget *protocol_combo;
     GtkWidget *username_entry;
     GtkWidget *cache_hours_spin;
+    GtkWidget *external_browser_check;
     GtkWidget *extra_args_entry;
 
     NMConnection *connection;
@@ -133,6 +134,21 @@ init_editor_ui (NmVpnSsoEditor *self)
     g_signal_connect (self->cache_hours_spin, "value-changed", G_CALLBACK (widget_changed_cb), self);
     row++;
 
+    /* External browser checkbox */
+    label = gtk_label_new ("External Browser:");
+    gtk_widget_set_halign (label, GTK_ALIGN_END);
+    gtk_grid_attach (GTK_GRID (grid), label, 0, row, 1, 1);
+
+    self->external_browser_check = gtk_check_button_new_with_label (
+        "Use system browser for SSO (enables password manager)");
+    gtk_widget_set_tooltip_text (self->external_browser_check,
+        "Opens your default browser (Firefox, Chrome, etc.) for SSO login instead of embedded browser.\n"
+        "This allows you to use your password manager extensions.");
+    gtk_widget_set_hexpand (self->external_browser_check, TRUE);
+    gtk_grid_attach (GTK_GRID (grid), self->external_browser_check, 1, row, 1, 1);
+    g_signal_connect (self->external_browser_check, "toggled", G_CALLBACK (widget_changed_cb), self);
+    row++;
+
     /* Extra arguments */
     label = gtk_label_new ("Extra Arguments:");
     gtk_widget_set_halign (label, GTK_ALIGN_END);
@@ -193,6 +209,11 @@ load_connection_settings (NmVpnSsoEditor *self)
         gtk_spin_button_set_value (GTK_SPIN_BUTTON (self->cache_hours_spin), atoi (value));
     else
         gtk_spin_button_set_value (GTK_SPIN_BUTTON (self->cache_hours_spin), 8);  /* Default */
+
+    /* Load external browser */
+    value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_EXTERNAL_BROWSER);
+    gtk_check_button_set_active (GTK_CHECK_BUTTON (self->external_browser_check),
+                                  value && g_strcmp0 (value, "yes") == 0);
 
     /* Load extra arguments */
     value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_EXTRA_ARGS);
@@ -271,6 +292,12 @@ nm_vpn_sso_editor_update_connection (NMVpnEditor  *editor,
     } else {
         nm_setting_vpn_remove_data_item (s_vpn, NM_VPN_SSO_KEY_CACHE_HOURS);
     }
+
+    /* Get external browser (optional, for GlobalProtect) */
+    if (gtk_check_button_get_active (GTK_CHECK_BUTTON (self->external_browser_check)))
+        nm_setting_vpn_add_data_item (s_vpn, NM_VPN_SSO_KEY_EXTERNAL_BROWSER, "yes");
+    else
+        nm_setting_vpn_remove_data_item (s_vpn, NM_VPN_SSO_KEY_EXTERNAL_BROWSER);
 
     /* Get extra arguments (optional) */
     extra_args = gtk_editable_get_text (GTK_EDITABLE (self->extra_args_entry));
