@@ -26,6 +26,7 @@ executable(
     glib_dep,
     gio_dep,
     libnm_dep,
+    libsecret_dep,
     vpn_sso_shared_dep,
   ],
   install: true,

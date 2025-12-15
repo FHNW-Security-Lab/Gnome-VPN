@@ -14,26 +14,62 @@
 #include "utils.h"
 
 #include <string.h>
-#include <sys/stat.h>
-#include <errno.h>
-#include <unistd.h>
 #include <pwd.h>
-#include <glib/gstdio.h>
+#include <sys/types.h>
 
 /**
  * SECTION:credential-cache
  * @title: Credential Cache
- * @short_description: File-based storage for VPN SSO credentials
+ * @short_description: GNOME Keyring storage for VPN SSO credentials
  *
- * This module provides secure file-based storage for VPN SSO credentials.
- * Credentials are stored in JSON files in the user's home directory with
- * restricted permissions (0600). Each gateway/protocol combination gets
- * its own cache file.
+ * This module provides secure storage for VPN SSO credentials using
+ * the secret-tool command to access GNOME Keyring.
  *
- * Files are stored in: ~/.cache/gnome-vpn-sso/
+ * When running as root, we spawn secret-tool as the target user using
+ * runuser, since D-Bus session buses reject connections from different UIDs.
  */
 
-#define CACHE_DIR_NAME ".cache/gnome-vpn-sso"
+/* Cache the target username for keyring operations */
+static gchar *cached_target_username = NULL;
+
+/*
+ * Get the username for keyring operations.
+ * When running as root, we need to find the logged-in user's username.
+ */
+static const gchar *
+get_target_username (void)
+{
+    if (cached_target_username)
+        return cached_target_username;
+
+    /* If not running as root, use current user */
+    if (getuid () != 0) {
+        struct passwd *pw = getpwuid (getuid ());
+        if (pw) {
+            cached_target_username = g_strdup (pw->pw_name);
+            g_message ("KEYRING: Using current user: %s", cached_target_username);
+            return cached_target_username;
+        }
+    }
+
+    /* Running as root - find graphical session user */
+    VpnSsoSessionEnv *session_env = vpn_sso_get_graphical_session_env ();
+    if (session_env && session_env->uid > 0) {
+        struct passwd *pw = getpwuid (session_env->uid);
+        if (pw) {
+            cached_target_username = g_strdup (pw->pw_name);
+            g_message ("KEYRING: Using graphical session user: %s (UID %d)",
+                       cached_target_username, session_env->uid);
+        }
+        vpn_sso_session_env_free (session_env);
+    }
+
+    if (!cached_target_username) {
+        g_warning ("KEYRING: Could not determine target username for keyring access");
+    }
+
+    return cached_target_username;
+}
 
 void
 vpn_sso_cached_credential_free (VpnSsoCachedCredential *credential)
@@ -57,140 +93,7 @@ vpn_sso_cached_credential_free (VpnSsoCachedCredential *credential)
 }
 
 /*
- * Get the user's home directory from session environment
- */
-static gchar *
-get_user_home_dir (void)
-{
-    g_autoptr(VpnSsoSessionEnv) session_env = vpn_sso_get_graphical_session_env ();
-
-    if (session_env && session_env->home)
-        return g_strdup (session_env->home);
-
-    /* Fallback to env or /tmp */
-    const gchar *home = g_getenv ("HOME");
-    if (home)
-        return g_strdup (home);
-
-    return g_strdup ("/tmp");
-}
-
-/*
- * Get the cache directory path, creating it if needed
- * When running as root, we temporarily drop privileges to the target user
- * to create the directory with proper ownership.
- */
-static gchar *
-get_cache_dir (void)
-{
-    g_autoptr(VpnSsoSessionEnv) session_env = vpn_sso_get_graphical_session_env ();
-    g_autofree gchar *home = NULL;
-    gchar *cache_dir = NULL;
-    uid_t target_uid = 0;
-    gid_t target_gid = 0;
-    uid_t original_euid = geteuid ();
-    gid_t original_egid = getegid ();
-    gboolean dropped_privs = FALSE;
-
-    g_message ("get_cache_dir: running as euid=%d egid=%d", original_euid, original_egid);
-
-    if (session_env && session_env->home) {
-        home = g_strdup (session_env->home);
-        target_uid = session_env->uid;
-        /* Get the user's primary group */
-        struct passwd *pw = getpwuid (target_uid);
-        if (pw)
-            target_gid = pw->pw_gid;
-        g_message ("get_cache_dir: session_env found - home=%s uid=%d gid=%d",
-                   home, target_uid, target_gid);
-    } else {
-        const gchar *env_home = g_getenv ("HOME");
-        home = env_home ? g_strdup (env_home) : g_strdup ("/tmp");
-        g_message ("get_cache_dir: NO session_env, fallback home=%s", home);
-    }
-
-    cache_dir = g_build_filename (home, CACHE_DIR_NAME, NULL);
-    g_message ("get_cache_dir: cache_dir=%s", cache_dir);
-
-    /* If running as root and we have a target user, drop privileges temporarily */
-    if (original_euid == 0 && target_uid >= 1000 && target_gid > 0) {
-        g_message ("get_cache_dir: attempting to drop privileges to uid=%d gid=%d", target_uid, target_gid);
-        if (setegid (target_gid) == 0 && seteuid (target_uid) == 0) {
-            dropped_privs = TRUE;
-            g_message ("get_cache_dir: privileges dropped successfully");
-        } else {
-            g_warning ("Failed to drop privileges for cache directory creation: %s", g_strerror (errno));
-        }
-    } else {
-        g_message ("get_cache_dir: not dropping privileges (euid=%d, target_uid=%d, target_gid=%d)",
-                   original_euid, target_uid, target_gid);
-    }
-
-    /* Create directory if it doesn't exist */
-    if (g_mkdir_with_parents (cache_dir, 0700) != 0 && errno != EEXIST) {
-        int save_errno = errno;
-        g_warning ("Failed to create cache directory %s: %s", cache_dir, g_strerror (save_errno));
-
-        /* Restore privileges before trying fallback */
-        if (dropped_privs) {
-            seteuid (original_euid);
-            setegid (original_egid);
-            dropped_privs = FALSE;
-            g_message ("get_cache_dir: privileges restored for fallback");
-        }
-
-        /* Fallback to XDG_RUNTIME_DIR which should always be writable */
-        g_free (cache_dir);
-        if (session_env && session_env->xdg_runtime_dir) {
-            cache_dir = g_build_filename (session_env->xdg_runtime_dir, "gnome-vpn-sso", NULL);
-            g_message ("get_cache_dir: trying fallback to XDG_RUNTIME_DIR: %s", cache_dir);
-
-            /* Try to create the fallback directory */
-            if (g_mkdir_with_parents (cache_dir, 0700) != 0 && errno != EEXIST) {
-                g_warning ("Failed to create fallback cache directory %s: %s", cache_dir, g_strerror (errno));
-                g_free (cache_dir);
-                cache_dir = NULL;
-            } else {
-                g_message ("get_cache_dir: fallback directory created/exists: %s", cache_dir);
-            }
-        } else {
-            cache_dir = NULL;
-        }
-    } else {
-        g_message ("get_cache_dir: directory created/exists: %s", cache_dir);
-    }
-
-    /* Restore privileges if we dropped them */
-    if (dropped_privs) {
-        if (seteuid (original_euid) != 0 || setegid (original_egid) != 0) {
-            g_warning ("Failed to restore privileges: %s", g_strerror (errno));
-        } else {
-            g_message ("get_cache_dir: privileges restored");
-        }
-    }
-
-    return cache_dir;
-}
-
-/*
- * Generate a filename for the cache entry
- */
-static gchar *
-get_cache_filename (const gchar *gateway, const gchar *protocol)
-{
-    g_autofree gchar *cache_dir = get_cache_dir ();
-    if (!cache_dir)
-        return NULL;
-
-    /* Use a hash of gateway+protocol for filename */
-    g_autofree gchar *key = g_strdup_printf ("%s:%s", gateway, protocol);
-    g_autofree gchar *hash = g_compute_checksum_for_string (G_CHECKSUM_SHA256, key, -1);
-
-    return g_build_filename (cache_dir, hash, NULL);
-}
-
-/*
- * Serialize credential data to JSON for storage
+ * Serialize credential data to JSON for storage in keyring
  */
 static gchar *
 serialize_credential (const gchar *gateway,
@@ -247,7 +150,7 @@ parse_json_string (const gchar *json, const gchar *key)
     if (!g_regex_match (regex, json, 0, &match_info))
         return NULL;
 
-    gint start, end;
+    gint end;
     g_match_info_fetch_pos (match_info, 0, NULL, &end);
 
     /* Find the closing quote */
@@ -310,65 +213,158 @@ deserialize_credential (const gchar *json)
 }
 
 /*
- * Helper structure for privilege management
+ * Run secret-tool as target user.
+ * Returns stdout content on success, NULL on failure.
  */
-typedef struct {
-    uid_t original_euid;
-    gid_t original_egid;
-    gboolean dropped;
-} PrivilegeState;
-
-/*
- * Drop privileges to the target user for file operations
- */
-static gboolean
-drop_privileges_for_user (PrivilegeState *state)
+static gchar *
+run_secret_tool (const gchar * const *argv,
+                 const gchar         *stdin_data,
+                 GError             **error)
 {
-    g_autoptr(VpnSsoSessionEnv) session_env = NULL;
-
-    state->original_euid = geteuid ();
-    state->original_egid = getegid ();
-    state->dropped = FALSE;
-
-    if (state->original_euid != 0)
-        return TRUE; /* Not root, nothing to do */
-
-    session_env = vpn_sso_get_graphical_session_env ();
-    if (!session_env || session_env->uid < 1000)
-        return TRUE; /* No valid user found */
-
-    struct passwd *pw = getpwuid (session_env->uid);
-    if (!pw)
-        return TRUE;
-
-    if (setegid (pw->pw_gid) == 0 && seteuid (session_env->uid) == 0) {
-        state->dropped = TRUE;
-        g_debug ("Dropped privileges to UID %d for file operation", session_env->uid);
-        return TRUE;
+    const gchar *username = get_target_username ();
+    if (!username) {
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                     "Could not determine target user for keyring access");
+        return NULL;
     }
 
-    g_warning ("Failed to drop privileges: %s", g_strerror (errno));
-    return FALSE;
+    /* Build command: runuser -u <username> -- secret-tool <args...> */
+    g_autoptr(GPtrArray) cmd = g_ptr_array_new ();
+
+    /* If running as root, use runuser to switch to target user */
+    if (getuid () == 0) {
+        g_ptr_array_add (cmd, (gchar *) "/usr/sbin/runuser");
+        g_ptr_array_add (cmd, (gchar *) "-u");
+        g_ptr_array_add (cmd, (gchar *) username);
+        g_ptr_array_add (cmd, (gchar *) "--");
+    }
+
+    /* Add secret-tool command and arguments */
+    for (int i = 0; argv[i] != NULL; i++) {
+        g_ptr_array_add (cmd, (gchar *) argv[i]);
+    }
+    g_ptr_array_add (cmd, NULL);
+
+    g_autofree gchar *cmdline = g_strjoinv (" ", (gchar **) cmd->pdata);
+    g_message ("KEYRING: Running command: %s", cmdline);
+
+    GSubprocessFlags flags = G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE;
+    if (stdin_data)
+        flags |= G_SUBPROCESS_FLAGS_STDIN_PIPE;
+
+    g_autoptr(GSubprocess) proc = g_subprocess_newv ((const gchar * const *) cmd->pdata,
+                                                      flags, error);
+    if (!proc) {
+        g_prefix_error (error, "Failed to spawn secret-tool: ");
+        return NULL;
+    }
+
+    g_autofree gchar *stdout_data = NULL;
+    g_autofree gchar *stderr_data = NULL;
+    GBytes *stdin_bytes = stdin_data ? g_bytes_new_static (stdin_data, strlen (stdin_data)) : NULL;
+
+    gboolean success = g_subprocess_communicate_utf8 (proc,
+                                                       stdin_data,
+                                                       NULL, /* cancellable */
+                                                       &stdout_data,
+                                                       &stderr_data,
+                                                       error);
+
+    if (stdin_bytes)
+        g_bytes_unref (stdin_bytes);
+
+    if (!success) {
+        g_prefix_error (error, "secret-tool communication failed: ");
+        return NULL;
+    }
+
+    gint exit_status = g_subprocess_get_exit_status (proc);
+    if (exit_status != 0) {
+        /* Exit status 1 from secret-tool lookup means "not found" - not an error */
+        if (exit_status == 1 && g_strstr_len (cmdline, -1, "lookup")) {
+            g_message ("KEYRING: secret-tool lookup returned no results");
+            return NULL;
+        }
+
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                     "secret-tool exited with status %d: %s",
+                     exit_status, stderr_data ? stderr_data : "(no error output)");
+        return NULL;
+    }
+
+    return g_steal_pointer (&stdout_data);
 }
 
 /*
- * Restore privileges after file operations
+ * Data structure for async store operation
+ */
+typedef struct {
+    gchar *gateway;
+    gchar *protocol;
+    gchar *username;
+    gchar *json;
+    gchar *label;
+} StoreData;
+
+static void
+store_data_free (StoreData *data)
+{
+    if (data) {
+        g_free (data->gateway);
+        g_free (data->protocol);
+        g_free (data->username);
+        g_free (data->label);
+        if (data->json) {
+            memset (data->json, 0, strlen (data->json));
+            g_free (data->json);
+        }
+        g_free (data);
+    }
+}
+
+/*
+ * Thread function for storing credentials using secret-tool.
  */
 static void
-restore_privileges (PrivilegeState *state)
+store_thread_func (GTask        *task,
+                   gpointer      source_object G_GNUC_UNUSED,
+                   gpointer      task_data,
+                   GCancellable *cancellable G_GNUC_UNUSED)
 {
-    if (!state->dropped)
-        return;
+    StoreData *data = task_data;
+    GError *error = NULL;
 
-    if (seteuid (state->original_euid) != 0 || setegid (state->original_egid) != 0) {
-        g_warning ("Failed to restore privileges: %s", g_strerror (errno));
+    g_message ("KEYRING STORE THREAD: Storing credentials for %s:%s",
+               data->gateway, data->protocol);
+
+    /* Build secret-tool store command */
+    const gchar *argv[] = {
+        "/usr/bin/secret-tool", "store",
+        "--label", data->label,
+        "xdg:schema", "org.freedesktop.NetworkManager.vpn-sso",
+        "gateway", data->gateway,
+        "protocol", data->protocol,
+        NULL
+    };
+
+    /* secret-tool reads the secret from stdin */
+    gchar *result = run_secret_tool (argv, data->json, &error);
+
+    if (error) {
+        g_warning ("KEYRING STORE THREAD: FAILED to store credentials: %s", error->message);
+        g_task_return_error (task, error);
+    } else {
+        g_message ("KEYRING STORE THREAD: SUCCESS - credentials stored for %s:%s",
+                   data->gateway, data->protocol);
+        g_free (result);
+        g_task_return_boolean (task, TRUE);
     }
 }
 
 /**
  * vpn_sso_credential_cache_store_async:
  *
- * Stores VPN SSO credentials in the cache.
+ * Stores VPN SSO credentials in GNOME Keyring.
  */
 void
 vpn_sso_credential_cache_store_async (const gchar         *gateway,
@@ -383,8 +379,7 @@ vpn_sso_credential_cache_store_async (const gchar         *gateway,
                                        gpointer             user_data)
 {
     GTask *task;
-    g_autoptr(GError) error = NULL;
-    PrivilegeState priv_state = { 0 };
+    StoreData *data;
 
     g_return_if_fail (gateway != NULL);
     g_return_if_fail (protocol != NULL);
@@ -399,51 +394,26 @@ vpn_sso_credential_cache_store_async (const gchar         *gateway,
     gint64 now = g_get_real_time () / G_USEC_PER_SEC;
     gint64 expires_at = now + (cache_hours * 3600);
 
-    g_message ("CACHE STORE: gateway=%s protocol=%s username=%s cookie=%s (expires in %d hours)",
+    g_message ("KEYRING STORE: gateway=%s protocol=%s username=%s cookie=%s (expires in %d hours)",
                gateway, protocol, username ? username : "(null)",
-               cookie ? "(present)" : "(null)",
-               cache_hours > 0 ? cache_hours : VPN_SSO_DEFAULT_CACHE_DURATION_HOURS);
+               cookie ? "(present)" : "(null)", cache_hours);
 
     /* Serialize to JSON */
-    g_autofree gchar *json = serialize_credential (gateway, protocol, username,
-                                                   cookie, fingerprint, usergroup,
-                                                   now, expires_at);
+    gchar *json = serialize_credential (gateway, protocol, username,
+                                        cookie, fingerprint, usergroup,
+                                        now, expires_at);
 
-    g_message ("CACHE STORE: JSON length=%zu", json ? strlen(json) : 0);
+    /* Store data for thread */
+    data = g_new0 (StoreData, 1);
+    data->gateway = g_strdup (gateway);
+    data->protocol = g_strdup (protocol);
+    data->username = g_strdup (username);
+    data->json = json;
+    data->label = g_strdup_printf ("VPN SSO: %s (%s)", gateway, protocol);
+    g_task_set_task_data (task, data, (GDestroyNotify) store_data_free);
 
-    /* Get cache filename (this also creates dir with proper privileges) */
-    g_autofree gchar *filename = get_cache_filename (gateway, protocol);
-    if (!filename) {
-        g_warning ("CACHE STORE: Failed to get cache filename!");
-        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
-                                 "Failed to get cache filename");
-        g_object_unref (task);
-        return;
-    }
-
-    g_message ("CACHE STORE: filename=%s", filename);
-
-    /* Drop privileges for file write operation */
-    drop_privileges_for_user (&priv_state);
-
-    /* Write to file with restricted permissions */
-    if (!g_file_set_contents (filename, json, -1, &error)) {
-        g_warning ("CACHE STORE: Failed to write file: %s", error->message);
-        restore_privileges (&priv_state);
-        g_task_return_error (task, g_steal_pointer (&error));
-        g_object_unref (task);
-        return;
-    }
-
-    /* Set file permissions to 0600 */
-    if (chmod (filename, 0600) != 0) {
-        g_warning ("Failed to set cache file permissions: %s", g_strerror (errno));
-    }
-
-    restore_privileges (&priv_state);
-
-    g_message ("CACHE STORE: SUCCESS - credentials stored in %s", filename);
-    g_task_return_boolean (task, TRUE);
+    /* Run in thread */
+    g_task_run_in_thread (task, store_thread_func);
     g_object_unref (task);
 }
 
@@ -461,10 +431,100 @@ vpn_sso_credential_cache_store_finish (GAsyncResult  *result,
     return g_task_propagate_boolean (G_TASK (result), error);
 }
 
+/*
+ * Data structure for async lookup operation
+ */
+typedef struct {
+    gchar *gateway;
+    gchar *protocol;
+} LookupData;
+
+static void
+lookup_data_free (LookupData *data)
+{
+    if (data) {
+        g_free (data->gateway);
+        g_free (data->protocol);
+        g_free (data);
+    }
+}
+
+/*
+ * Thread function for looking up credentials using secret-tool.
+ */
+static void
+lookup_thread_func (GTask        *task,
+                    gpointer      source_object G_GNUC_UNUSED,
+                    gpointer      task_data,
+                    GCancellable *cancellable G_GNUC_UNUSED)
+{
+    LookupData *data = task_data;
+    GError *error = NULL;
+
+    g_message ("KEYRING LOOKUP THREAD: Looking up credentials for %s:%s",
+               data->gateway, data->protocol);
+
+    /* Build secret-tool lookup command */
+    const gchar *argv[] = {
+        "/usr/bin/secret-tool", "lookup",
+        "xdg:schema", "org.freedesktop.NetworkManager.vpn-sso",
+        "gateway", data->gateway,
+        "protocol", data->protocol,
+        NULL
+    };
+
+    gchar *secret = run_secret_tool (argv, NULL, &error);
+
+    if (error) {
+        g_warning ("KEYRING LOOKUP THREAD: Error looking up credentials: %s", error->message);
+        g_task_return_error (task, error);
+        return;
+    }
+
+    if (!secret || !*secret) {
+        g_message ("KEYRING LOOKUP THREAD: No cached credentials found for %s:%s",
+                   data->gateway, data->protocol);
+        g_free (secret);
+        g_task_return_pointer (task, NULL, NULL);
+        return;
+    }
+
+    g_message ("KEYRING LOOKUP THREAD: FOUND credentials for %s:%s (secret length=%zu)",
+               data->gateway, data->protocol, strlen (secret));
+
+    /* Parse JSON */
+    VpnSsoCachedCredential *cred = deserialize_credential (secret);
+
+    /* Securely clear and free the secret string */
+    memset (secret, 0, strlen (secret));
+    g_free (secret);
+
+    if (!cred) {
+        g_warning ("KEYRING LOOKUP THREAD: Failed to parse cached credentials");
+        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+                                 "Failed to parse cached credentials");
+        return;
+    }
+
+    /* Check expiration */
+    gint64 now = g_get_real_time () / G_USEC_PER_SEC;
+    if (cred->expires_at > 0 && now >= cred->expires_at) {
+        g_message ("KEYRING LOOKUP THREAD: Cached credentials expired - will be cleared");
+        vpn_sso_cached_credential_free (cred);
+        g_task_return_pointer (task, NULL, NULL);
+        return;
+    }
+
+    gint64 remaining = cred->expires_at - now;
+    g_message ("KEYRING LOOKUP THREAD: Valid credentials (expires in %" G_GINT64_FORMAT " seconds)", remaining);
+
+    g_task_return_pointer (task, cred, (GDestroyNotify) vpn_sso_cached_credential_free);
+}
+
 /**
  * vpn_sso_credential_cache_lookup_async:
  *
- * Looks up cached credentials for a gateway.
+ * Looks up cached credentials from GNOME Keyring.
  */
 void
 vpn_sso_credential_cache_lookup_async (const gchar         *gateway,
@@ -474,9 +534,7 @@ vpn_sso_credential_cache_lookup_async (const gchar         *gateway,
                                         gpointer             user_data)
 {
     GTask *task;
-    g_autoptr(GError) error = NULL;
-    g_autofree gchar *contents = NULL;
-    VpnSsoCachedCredential *cred = NULL;
+    LookupData *data;
 
     g_return_if_fail (gateway != NULL);
     g_return_if_fail (protocol != NULL);
@@ -484,60 +542,16 @@ vpn_sso_credential_cache_lookup_async (const gchar         *gateway,
     task = g_task_new (NULL, cancellable, callback, user_data);
     g_task_set_source_tag (task, vpn_sso_credential_cache_lookup_async);
 
-    g_message ("CACHE LOOKUP: gateway=%s protocol=%s", gateway, protocol);
+    g_message ("KEYRING LOOKUP: gateway=%s protocol=%s", gateway, protocol);
 
-    /* Get cache filename */
-    g_autofree gchar *filename = get_cache_filename (gateway, protocol);
-    if (!filename) {
-        g_warning ("CACHE LOOKUP: Failed to get cache filename!");
-        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
-                                 "Failed to get cache filename");
-        g_object_unref (task);
-        return;
-    }
+    /* Store data for thread */
+    data = g_new0 (LookupData, 1);
+    data->gateway = g_strdup (gateway);
+    data->protocol = g_strdup (protocol);
+    g_task_set_task_data (task, data, (GDestroyNotify) lookup_data_free);
 
-    g_message ("CACHE LOOKUP: filename=%s", filename);
-
-    /* Read file */
-    if (!g_file_get_contents (filename, &contents, NULL, &error)) {
-        if (g_error_matches (error, G_FILE_ERROR, G_FILE_ERROR_NOENT)) {
-            g_message ("CACHE LOOKUP: No cached credentials found (file does not exist)");
-            g_task_return_pointer (task, NULL, NULL);
-        } else {
-            g_warning ("CACHE LOOKUP: Error reading file: %s", error->message);
-            g_task_return_error (task, g_steal_pointer (&error));
-        }
-        g_object_unref (task);
-        return;
-    }
-
-    g_message ("CACHE LOOKUP: File read successfully, length=%zu", contents ? strlen(contents) : 0);
-
-    /* Parse JSON */
-    cred = deserialize_credential (contents);
-    if (!cred) {
-        g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
-                                 "Failed to parse cached credentials");
-        g_object_unref (task);
-        return;
-    }
-
-    /* Check expiration */
-    gint64 now = g_get_real_time () / G_USEC_PER_SEC;
-    if (cred->expires_at > 0 && now >= cred->expires_at) {
-        g_message ("Cached credentials expired");
-        vpn_sso_cached_credential_free (cred);
-        /* Delete expired file */
-        g_unlink (filename);
-        g_task_return_pointer (task, NULL, NULL);
-        g_object_unref (task);
-        return;
-    }
-
-    gint64 remaining = cred->expires_at - now;
-    g_message ("Found valid cached credentials (expires in %" G_GINT64_FORMAT " seconds)", remaining);
-
-    g_task_return_pointer (task, cred, (GDestroyNotify) vpn_sso_cached_credential_free);
+    /* Run in thread */
+    g_task_run_in_thread (task, lookup_thread_func);
     g_object_unref (task);
 }
 
@@ -555,10 +569,67 @@ vpn_sso_credential_cache_lookup_finish (GAsyncResult  *result,
     return g_task_propagate_pointer (G_TASK (result), error);
 }
 
+/*
+ * Data structure for clear operation
+ */
+typedef struct {
+    gchar *gateway;
+    gchar *protocol;
+} ClearData;
+
+static void
+clear_data_free (ClearData *data)
+{
+    if (data) {
+        g_free (data->gateway);
+        g_free (data->protocol);
+        g_free (data);
+    }
+}
+
+/*
+ * Thread function for clearing credentials using secret-tool.
+ */
+static void
+clear_thread_func (GTask        *task,
+                   gpointer      source_object G_GNUC_UNUSED,
+                   gpointer      task_data,
+                   GCancellable *cancellable G_GNUC_UNUSED)
+{
+    ClearData *data = task_data;
+    GError *error = NULL;
+
+    g_message ("KEYRING CLEAR THREAD: Clearing credentials for %s:%s",
+               data->gateway, data->protocol);
+
+    /* Build secret-tool clear command */
+    const gchar *argv[] = {
+        "/usr/bin/secret-tool", "clear",
+        "xdg:schema", "org.freedesktop.NetworkManager.vpn-sso",
+        "gateway", data->gateway,
+        "protocol", data->protocol,
+        NULL
+    };
+
+    gchar *result = run_secret_tool (argv, NULL, &error);
+    g_free (result);
+
+    if (error) {
+        g_warning ("KEYRING CLEAR THREAD: Error clearing credentials: %s", error->message);
+        g_error_free (error);
+        /* Don't fail the task - clearing is best effort */
+    } else {
+        g_message ("KEYRING CLEAR THREAD: SUCCESS - credentials cleared for %s:%s",
+                   data->gateway, data->protocol);
+    }
+
+    g_task_return_boolean (task, TRUE);
+}
+
 /**
  * vpn_sso_credential_cache_clear_async:
  *
- * Clears cached credentials for a gateway.
+ * Clears cached credentials for a gateway from GNOME Keyring.
  */
 void
 vpn_sso_credential_cache_clear_async (const gchar         *gateway,
@@ -568,6 +639,7 @@ vpn_sso_credential_cache_clear_async (const gchar         *gateway,
                                        gpointer             user_data)
 {
     GTask *task;
+    ClearData *data;
 
     g_return_if_fail (gateway != NULL);
     g_return_if_fail (protocol != NULL);
@@ -575,14 +647,16 @@ vpn_sso_credential_cache_clear_async (const gchar         *gateway,
     task = g_task_new (NULL, cancellable, callback, user_data);
     g_task_set_source_tag (task, vpn_sso_credential_cache_clear_async);
 
-    g_debug ("Clearing cached credential for %s:%s", gateway, protocol);
+    g_message ("KEYRING CLEAR: Clearing credentials for %s:%s", gateway, protocol);
 
-    g_autofree gchar *filename = get_cache_filename (gateway, protocol);
-    if (filename) {
-        g_unlink (filename);
-    }
+    /* Store data for thread */
+    data = g_new0 (ClearData, 1);
+    data->gateway = g_strdup (gateway);
+    data->protocol = g_strdup (protocol);
+    g_task_set_task_data (task, data, (GDestroyNotify) clear_data_free);
 
-    g_task_return_boolean (task, TRUE);
+    /* Run in thread */
+    g_task_run_in_thread (task, clear_thread_func);
     g_object_unref (task);
 }
 
@@ -600,10 +674,43 @@ vpn_sso_credential_cache_clear_finish (GAsyncResult  *result,
     return g_task_propagate_boolean (G_TASK (result), error);
 }
 
+/*
+ * Thread function for clearing all credentials using secret-tool.
+ */
+static void
+clear_all_thread_func (GTask        *task,
+                       gpointer      source_object G_GNUC_UNUSED,
+                       gpointer      task_data G_GNUC_UNUSED,
+                       GCancellable *cancellable G_GNUC_UNUSED)
+{
+    GError *error = NULL;
+
+    g_message ("KEYRING CLEAR ALL THREAD: Clearing all VPN SSO credentials");
+
+    /* Build secret-tool clear command - clear all items with our schema */
+    const gchar *argv[] = {
+        "/usr/bin/secret-tool", "clear",
+        "xdg:schema", "org.freedesktop.NetworkManager.vpn-sso",
+        NULL
+    };
+
+    gchar *result = run_secret_tool (argv, NULL, &error);
+    g_free (result);
+
+    if (error) {
+        g_warning ("KEYRING CLEAR ALL THREAD: Error clearing credentials: %s", error->message);
+        g_error_free (error);
+    } else {
+        g_message ("KEYRING CLEAR ALL THREAD: SUCCESS - all credentials cleared");
+    }
+
+    g_task_return_boolean (task, TRUE);
+}
+
 /**
  * vpn_sso_credential_cache_clear_all_async:
  *
- * Clears all cached credentials.
+ * Clears all cached VPN SSO credentials from GNOME Keyring.
  */
 void
 vpn_sso_credential_cache_clear_all_async (GCancellable        *cancellable,
@@ -611,36 +718,14 @@ vpn_sso_credential_cache_clear_all_async (GCancellable        *cancellable,
                                            gpointer             user_data)
 {
     GTask *task;
-    g_autoptr(GDir) dir = NULL;
-    g_autoptr(GError) error = NULL;
-    const gchar *name;
 
     task = g_task_new (NULL, cancellable, callback, user_data);
     g_task_set_source_tag (task, vpn_sso_credential_cache_clear_all_async);
 
-    g_debug ("Clearing all cached credentials");
+    g_message ("KEYRING CLEAR ALL: Clearing all VPN SSO credentials");
 
-    g_autofree gchar *cache_dir = get_cache_dir ();
-    if (!cache_dir) {
-        g_task_return_boolean (task, TRUE);
-        g_object_unref (task);
-        return;
-    }
-
-    dir = g_dir_open (cache_dir, 0, &error);
-    if (!dir) {
-        /* No directory = no cached credentials */
-        g_task_return_boolean (task, TRUE);
-        g_object_unref (task);
-        return;
-    }
-
-    while ((name = g_dir_read_name (dir)) != NULL) {
-        g_autofree gchar *path = g_build_filename (cache_dir, name, NULL);
-        g_unlink (path);
-    }
-
-    g_task_return_boolean (task, TRUE);
+    /* Run in thread */
+    g_task_run_in_thread (task, clear_all_thread_func);
     g_object_unref (task);
 }
 

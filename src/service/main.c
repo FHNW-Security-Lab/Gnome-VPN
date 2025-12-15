@@ -11,17 +11,64 @@
 
 #include "config.h"
 #include "nm-vpn-sso-service.h"
+#include "utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
 #include <locale.h>
+#include <unistd.h>
 #include <glib.h>
 #include <glib-unix.h>
 #include <NetworkManager.h>
 
 #define NM_VPN_SSO_BUS_NAME "org.freedesktop.NetworkManager.vpn-sso"
+
+/*
+ * Set up the user's D-Bus session environment early.
+ * This MUST be called before any GLib/D-Bus initialization so that
+ * libsecret (and other D-Bus clients) can connect to the user's session.
+ */
+static void
+setup_user_dbus_session (void)
+{
+    /* If we already have a D-Bus session, nothing to do */
+    if (g_getenv ("DBUS_SESSION_BUS_ADDRESS"))
+        return;
+
+    /* If not running as root, nothing to do */
+    if (getuid () != 0)
+        return;
+
+    fprintf (stderr, "[MESSAGE] Running as root without D-Bus session - detecting user session\n");
+
+    VpnSsoSessionEnv *env = vpn_sso_get_graphical_session_env ();
+    if (!env) {
+        fprintf (stderr, "[WARNING] Could not detect user graphical session\n");
+        return;
+    }
+
+    if (env->dbus_session_bus_address) {
+        setenv ("DBUS_SESSION_BUS_ADDRESS", env->dbus_session_bus_address, 1);
+        fprintf (stderr, "[MESSAGE] Set DBUS_SESSION_BUS_ADDRESS=%s\n", env->dbus_session_bus_address);
+    }
+
+    if (env->xdg_runtime_dir) {
+        setenv ("XDG_RUNTIME_DIR", env->xdg_runtime_dir, 1);
+        fprintf (stderr, "[MESSAGE] Set XDG_RUNTIME_DIR=%s\n", env->xdg_runtime_dir);
+    }
+
+    if (env->display) {
+        setenv ("DISPLAY", env->display, 1);
+    }
+
+    if (env->home) {
+        setenv ("HOME", env->home, 1);
+    }
+
+    vpn_sso_session_env_free (env);
+}
 
 static GMainLoop *main_loop = NULL;
 static NmVpnSsoService *vpn_service = NULL;
@@ -102,6 +149,12 @@ main (int argc, char **argv)
           "Enable verbose debug logging", NULL },
         { NULL }
     };
+
+    /*
+     * CRITICAL: Set up D-Bus session environment BEFORE any GLib initialization.
+     * This ensures libsecret can connect to the user's keyring.
+     */
+    setup_user_dbus_session ();
 
     /* Set locale */
     setlocale (LC_ALL, "");

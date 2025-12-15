@@ -101,6 +101,9 @@ struct _NmVpnSsoServicePrivate {
     /* IP4 config reporting retry mechanism */
     guint ip4_config_retry_source;
     gint ip4_config_retry_count;
+
+    /* Cached credential tracking for fallback to SSO */
+    gboolean using_cached_credentials;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE (NmVpnSsoService, nm_vpn_sso_service, NM_TYPE_VPN_SERVICE_PLUGIN)
@@ -195,12 +198,16 @@ credential_lookup_cb (GObject      *source,
             priv->usergroup = g_strdup (cached->usergroup);
         }
 
+        /* Mark that we're using cached credentials for fallback handling */
+        priv->using_cached_credentials = TRUE;
+
         /* Skip SSO and go directly to OpenConnect */
         priv->state = VPN_STATE_CONNECTING;
         start_openconnect (self);
     } else {
         g_message ("No valid cached credentials found for %s (%s) - starting SSO",
                    priv->gateway, priv->protocol);
+        priv->using_cached_credentials = FALSE;
         start_sso_authentication (self);
     }
 }
@@ -395,6 +402,8 @@ sso_child_watch_cb (GPid pid, gint status, gpointer user_data)
                 g_message ("AnyConnect SSO successful, starting OpenConnect with cookie");
                 /* Store credentials in cache for future connections */
                 store_credentials_in_cache (self);
+                /* Fresh credentials from SSO - don't retry SSO if these fail */
+                priv->using_cached_credentials = FALSE;
                 priv->state = VPN_STATE_CONNECTING;
                 start_openconnect (self);
             } else {
@@ -421,6 +430,8 @@ sso_child_watch_cb (GPid pid, gint status, gpointer user_data)
                 g_message ("SSO authentication successful, starting OpenConnect");
                 /* Store credentials in cache for future connections */
                 store_credentials_in_cache (self);
+                /* Fresh credentials from SSO - don't retry SSO if these fail */
+                priv->using_cached_credentials = FALSE;
                 priv->state = VPN_STATE_CONNECTING;
                 start_openconnect (self);
             } else {
@@ -1112,9 +1123,28 @@ openconnect_child_watch_cb (GPid pid, gint status, gpointer user_data)
     priv->openconnect_pid = 0;
     priv->openconnect_child_watch = 0;
 
-    /* Notify NetworkManager that the connection is down */
+    /* Handle connection failure */
     if (priv->state == VPN_STATE_CONNECTED || priv->state == VPN_STATE_CONNECTING) {
         if (WIFEXITED (status) && WEXITSTATUS (status) != 0) {
+            /* OpenConnect failed - check if we should fallback to SSO */
+            if (priv->using_cached_credentials) {
+                g_message ("Cached credentials failed - clearing cache and falling back to SSO");
+
+                /* Clear invalid cached credentials */
+                vpn_sso_credential_cache_clear_async (priv->gateway, priv->protocol,
+                                                      NULL, NULL, NULL);
+
+                /* Clear credential state */
+                g_clear_pointer (&priv->sso_cookie, g_free);
+                g_clear_pointer (&priv->sso_fingerprint, g_free);
+                priv->using_cached_credentials = FALSE;
+
+                /* Fallback to SSO authentication */
+                priv->state = VPN_STATE_AUTHENTICATING;
+                start_sso_authentication (self);
+                return;
+            }
+
             nm_vpn_service_plugin_failure (NM_VPN_SERVICE_PLUGIN (self),
                                           NM_VPN_PLUGIN_FAILURE_CONNECT_FAILED);
         } else {
