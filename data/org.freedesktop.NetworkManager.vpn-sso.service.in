@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.freedesktop.NetworkManager.vpn-sso
+Exec=@LIBEXECDIR@/nm-vpn-sso-service
+User=root
+SystemdService=NetworkManager-vpn-sso.service

@@ -1,0 +1,14 @@
+[VPN Connection]
+name=vpn-sso
+service=org.freedesktop.NetworkManager.vpn-sso
+program=@LIBEXECDIR@/nm-vpn-sso-service
+supports-multiple-connections=false
+
+[libnm]
+plugin=libnm-vpn-plugin-vpn-sso-editor.so
+
+[GNOME]
+auth-dialog=@LIBEXECDIR@/nm-vpn-sso-auth-dialog
+properties=libnm-vpn-sso-properties
+supports-external-ui-mode=true
+supports-hints=true

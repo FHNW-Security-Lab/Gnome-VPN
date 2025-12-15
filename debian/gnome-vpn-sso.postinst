@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+case "$1" in
+    configure)
+        # All SSO tools are bundled in /opt/gnome-vpn-sso
+        # No pip installs needed at runtime
+
+        # Reload DBus configuration
+        if [ -x /bin/systemctl ]; then
+            systemctl reload dbus || true
+        fi
+
+        # Restart NetworkManager to load the new VPN plugin
+        if [ -x /bin/systemctl ]; then
+            systemctl reload-or-restart NetworkManager || true
+        elif [ -x /etc/init.d/network-manager ]; then
+            /etc/init.d/network-manager restart || true
+        fi
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

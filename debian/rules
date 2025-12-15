@@ -1,0 +1,67 @@
+#!/usr/bin/make -f
+
+# See debhelper(7) (uncomment to enable)
+# output every command that modifies files on the build system.
+export DH_VERBOSE = 1
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# Directory where we'll install the bundled Python venv
+VENV_DIR = /opt/gnome-vpn-sso
+
+%:
+	dh $@ --buildsystem=meson
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		--prefix=/usr \
+		-Dnm_plugindir=/usr/lib/$(DEB_HOST_MULTIARCH)/NetworkManager
+
+override_dh_auto_install:
+	dh_auto_install
+
+	# Create bundled Python virtual environment with SSO tools
+	@echo "Creating bundled Python virtual environment..."
+	python3 -m venv --system-site-packages debian/gnome-vpn-sso$(VENV_DIR)
+
+	# Install SSO tools into the bundled venv (using --no-deps to use system packages)
+	# Use --ignore-installed to force install into venv even if available elsewhere
+	@echo "Installing openconnect-sso into bundled venv..."
+	debian/gnome-vpn-sso$(VENV_DIR)/bin/pip install --no-cache-dir --no-deps --ignore-installed openconnect-sso
+
+	@echo "Installing gp-saml-gui into bundled venv..."
+	debian/gnome-vpn-sso$(VENV_DIR)/bin/pip install --no-cache-dir --no-deps --ignore-installed \
+		https://github.com/dlenski/gp-saml-gui/archive/master.zip
+
+	# Fix shebangs in the venv scripts to use correct installed path
+	@echo "Fixing shebangs in venv scripts..."
+	sed -i '1s|#!.*|#!/opt/gnome-vpn-sso/bin/python3|' debian/gnome-vpn-sso$(VENV_DIR)/bin/openconnect-sso
+	sed -i '1s|#!.*|#!/opt/gnome-vpn-sso/bin/python3|' debian/gnome-vpn-sso$(VENV_DIR)/bin/gp-saml-gui
+
+	# Fix python3 symlink to use system python
+	rm -f debian/gnome-vpn-sso$(VENV_DIR)/bin/python3
+	ln -s /usr/bin/python3 debian/gnome-vpn-sso$(VENV_DIR)/bin/python3
+
+	# Set PYTHONPATH in the scripts so they find bundled modules
+	# Use glob to find the actual python version directory
+	PYVER=$$(ls debian/gnome-vpn-sso$(VENV_DIR)/lib/ | grep python | head -1) && \
+	sed -i "2a import sys; sys.path.insert(0, \"/opt/gnome-vpn-sso/lib/$$PYVER/site-packages\")" debian/gnome-vpn-sso$(VENV_DIR)/bin/openconnect-sso && \
+	sed -i "2a import sys; sys.path.insert(0, \"/opt/gnome-vpn-sso/lib/$$PYVER/site-packages\")" debian/gnome-vpn-sso$(VENV_DIR)/bin/gp-saml-gui
+
+	# Create wrapper scripts in /usr/bin
+	@echo "Creating wrapper scripts..."
+	mkdir -p debian/gnome-vpn-sso/usr/bin
+
+	# Wrapper for openconnect-sso
+	echo '#!/bin/sh' > debian/gnome-vpn-sso/usr/bin/openconnect-sso
+	echo 'exec $(VENV_DIR)/bin/openconnect-sso "$$@"' >> debian/gnome-vpn-sso/usr/bin/openconnect-sso
+	chmod +x debian/gnome-vpn-sso/usr/bin/openconnect-sso
+
+	# Wrapper for gp-saml-gui
+	echo '#!/bin/sh' > debian/gnome-vpn-sso/usr/bin/gp-saml-gui
+	echo 'exec $(VENV_DIR)/bin/gp-saml-gui "$$@"' >> debian/gnome-vpn-sso/usr/bin/gp-saml-gui
+	chmod +x debian/gnome-vpn-sso/usr/bin/gp-saml-gui
+
+override_dh_shlibdeps:
+	# Skip shlibdeps for bundled Python packages to avoid dependency issues
+	dh_shlibdeps -X$(VENV_DIR)

@@ -1,0 +1,54 @@
+Source: gnome-vpn-sso
+Section: net
+Priority: optional
+Maintainer: GNOME VPN SSO Contributors <gnome-vpn-sso@example.com>
+Build-Depends: debhelper-compat (= 13),
+               meson,
+               ninja-build,
+               libnm-dev,
+               libgtk-4-dev,
+               libadwaita-1-dev,
+               libwebkitgtk-6.0-dev,
+               libsecret-1-dev,
+               python3,
+               python3-venv,
+               python3-pip
+Standards-Version: 4.6.0
+Homepage: https://github.com/gnome-vpn-sso/gnome-vpn-sso
+Vcs-Git: https://github.com/gnome-vpn-sso/gnome-vpn-sso.git
+
+Package: gnome-vpn-sso
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         network-manager,
+         openconnect,
+         python3,
+         python3-gi,
+         python3-lxml,
+         python3-pyqt6,
+         python3-pyqt6.qtwebengine,
+         python3-requests,
+         python3-attr,
+         python3-colorama,
+         python3-socks,
+         python3-xdg,
+         python3-secretstorage,
+         python3-keyring,
+         python3-prompt-toolkit,
+         python3-pyotp,
+         python3-structlog,
+         python3-toml,
+         gir1.2-gtk-4.0,
+         gir1.2-adw-1,
+         gir1.2-webkit-6.0,
+         gir1.2-webkit2-4.1,
+         gir1.2-gtk-3.0
+Description: GNOME NetworkManager plugin for SSO VPN connections
+ gnome-vpn-sso provides seamless integration of SSO-based VPN connections
+ with GNOME NetworkManager. It supports SAML-based authentication and
+ provides a user-friendly interface for managing VPN connections that
+ require Single Sign-On authentication.
+ .
+ This package includes the NetworkManager plugin, authentication helper,
+ and configuration tools for setting up and managing SSO VPN connections.

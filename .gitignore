@@ -1,0 +1,156 @@
+# Meson build directories
+builddir/
+build/
+_build/
+meson-logs/
+meson-private/
+
+# Compiled C files
+*.o
+*.so
+*.so.*
+*.a
+*.la
+*.lo
+*.dylib
+*.dll
+*.exe
+
+# C intermediate files
+*.d
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.*.swp
+.*.swo
+*.bak
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.project
+.cproject
+.settings/
+
+# Tags and indexes
+tags
+TAGS
+.tags
+.TAGS
+cscope.out
+cscope.in.out
+cscope.po.out
+
+# Generated files
+*.gir
+*.typelib
+Makefile
+config.h
+config.log
+config.status
+stamp-h1
+*.stamp
+
+# Autotools
+autom4te.cache/
+aclocal.m4
+compile
+config.guess
+config.sub
+configure
+depcomp
+install-sh
+ltmain.sh
+missing
+m4/
+
+# Debian packaging artifacts
+*.deb
+*.ddeb
+*.udeb
+*.dsc
+*.build
+!meson.build
+!*/meson.build
+*.buildinfo
+*.changes
+*.tar.gz
+*.tar.xz
+*.tar.bz2
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/*.log
+debian/*.substvars
+debian/tmp/
+debian/gnome-vpn-sso/
+.debhelper/
+
+# Downloaded dependencies
+deps/gp-saml-gui/
+deps/openconnect-sso/
+deps/*.tar.*
+deps/*.zip
+
+# Test artifacts
+test-results/
+*.test
+*.trs
+
+# Core dumps
+core
+core.*
+vgcore.*
+
+# Temporary files
+*.tmp
+*.temp
+*.cache
+.cache/
+
+# Coverage
+*.gcno
+*.gcda
+*.gcov
+coverage/
+htmlcov/
+
+# Documentation build
+docs/_build/
+docs/html/
+docs/latex/
+
+# Archives
+*.zip
+*.tar
+*.rar
+*.7z
+*.gz
+*.bz2
+*.xz
+
+# Logs
+*.log
+
+# pkg-config
+*.pc

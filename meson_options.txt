@@ -1,0 +1,17 @@
+option('nm_plugindir',
+  type: 'string',
+  value: '',
+  description: 'NetworkManager plugin directory (default: ${libdir}/NetworkManager)'
+)
+
+option('nm_vpn_dir',
+  type: 'string',
+  value: '',
+  description: 'NetworkManager VPN service file directory (default: ${sysconfdir}/NetworkManager/VPN)'
+)
+
+option('enable_gtk_doc',
+  type: 'boolean',
+  value: false,
+  description: 'Enable building documentation with gtk-doc'
+)

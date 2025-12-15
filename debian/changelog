@@ -1,0 +1,9 @@
+gnome-vpn-sso (0.1.0-1) UNRELEASED; urgency=medium
+
+  * Initial release.
+  * Support for SAML-based SSO authentication
+  * NetworkManager integration
+  * WebKit2-based authentication dialog
+  * Secure credential storage using libsecret
+
+ -- Your Name <your.email@example.com>  Sat, 14 Dec 2024 00:00:00 +0000
