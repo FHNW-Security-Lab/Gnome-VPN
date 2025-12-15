@@ -682,6 +682,34 @@ parse_openconnect_output (NmVpnSsoService *self, const gchar *buf)
             }
         }
     }
+
+    /* Parse gateway IP: look for "Connected to X.X.X.X:port" pattern
+     * OpenConnect outputs: "Connected to 147.86.3.240:443"
+     */
+    if (!priv->ip4_gateway) {
+        p = strstr (buf, "Connected to ");
+        if (p) {
+            p += 13; /* Skip "Connected to " */
+            /* Check if it looks like an IP address */
+            if (*p >= '0' && *p <= '9') {
+                const gchar *ip_end = p;
+                /* Parse until we hit ':' (port separator) or non-IP char */
+                while ((*ip_end >= '0' && *ip_end <= '9') || *ip_end == '.')
+                    ip_end++;
+                gchar *addr = g_strndup (p, ip_end - p);
+                /* Validate it looks like an IP (has 3 dots) */
+                gint dot_count = 0;
+                for (const gchar *c = addr; *c; c++)
+                    if (*c == '.') dot_count++;
+                if (dot_count == 3) {
+                    priv->ip4_gateway = addr;
+                    g_message ("Detected VPN gateway IP: %s", priv->ip4_gateway);
+                } else {
+                    g_free (addr);
+                }
+            }
+        }
+    }
 }
 
 static void
@@ -710,14 +738,19 @@ report_ip4_config (NmVpnSsoService *self)
         }
     }
 
-    /* If we know the VPN gateway, include it */
-    if (priv->gateway) {
+    /* Include the VPN gateway IP - use ip4_gateway (parsed from OpenConnect output)
+     * which contains the actual IP address, not the hostname in priv->gateway */
+    if (priv->ip4_gateway) {
         struct in_addr addr;
-        /* Gateway might be a hostname, try to resolve or skip */
-        if (inet_pton (AF_INET, priv->gateway, &addr) == 1) {
+        if (inet_pton (AF_INET, priv->ip4_gateway, &addr) == 1) {
             g_variant_builder_add (&builder, "{sv}", "gateway",
                                    g_variant_new_uint32 (addr.s_addr));
+            g_message ("Reporting gateway IP to NetworkManager: %s", priv->ip4_gateway);
+        } else {
+            g_warning ("Failed to convert gateway IP '%s' to network format", priv->ip4_gateway);
         }
+    } else {
+        g_warning ("No gateway IP detected from OpenConnect output");
     }
 
     GVariant *config = g_variant_builder_end (&builder);
