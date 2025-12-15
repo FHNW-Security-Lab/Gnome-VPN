@@ -309,20 +309,6 @@ See the [Development Notes](CLAUDE.md#development-notes) in `CLAUDE.md` for deta
 - Use GLib/GObject for C object model
 - GTK4 + libadwaita for user interfaces
 
-## FHNW Security Lab Projects
-
-This project is part of the [FHNW Security Lab](https://github.com/FHNW-Security-Lab). Check out our other projects:
-
-- **[ExploitSimulator](https://github.com/FHNW-Security-Lab/ExploitSimulator)** - A web based x86 exploit simulator
-- **[ExploitSimulator-Standalone](https://github.com/FHNW-Security-Lab/ExploitSimulator-Standalone)** - Standalone x86 Emulator and Exploit Simulator
-- **[ExploitationChallenge](https://github.com/FHNW-Security-Lab/ExploitationChallenge)** - Exploitation Challenges for Teaching Software Security
-- **[WebSecLab](https://github.com/FHNW-Security-Lab/WebSecLab)** - WebSecLab of FHNW
-- **[Proxmoxinator](https://github.com/FHNW-Security-Lab/Proxmoxinator)** - Management Tool for Cloudinit and Proxmox
-- **[mcs-analyser](https://github.com/FHNW-Security-Lab/mcs-analyser)** - Binary analysis tool to simulate and visualise communication paths of multi-component systems
-- **[TraceGuard](https://github.com/FHNW-Security-Lab/TraceGuard)** - Optimizing path exploration in symbolic execution using taint analysis
-- **[DefectDojoUploader](https://github.com/FHNW-Security-Lab/DefectDojoUploader)** - Easy Upload to Defect Dojo
-- **[Sanitizing-Checker](https://github.com/FHNW-Security-Lab/Sanitizing-Checker)** - Checking for security and sanitizing features in a binary
-
 ## License
 
 This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
