@@ -30,13 +30,12 @@
 /* Private data accessor - uses modern G_DEFINE_TYPE_WITH_PRIVATE */
 
 /* Configuration keys for VPN connection data */
-#define NM_VPN_SSO_KEY_GATEWAY           "gateway"
-#define NM_VPN_SSO_KEY_PROTOCOL          "protocol"
-#define NM_VPN_SSO_KEY_USERNAME          "username"
-#define NM_VPN_SSO_KEY_USERGROUP         "usergroup"
-#define NM_VPN_SSO_KEY_EXTRA_ARGS        "extra-args"
-#define NM_VPN_SSO_KEY_CACHE_HOURS       "cache-hours"
-#define NM_VPN_SSO_KEY_EXTERNAL_BROWSER  "external-browser"
+#define NM_VPN_SSO_KEY_GATEWAY      "gateway"
+#define NM_VPN_SSO_KEY_PROTOCOL     "protocol"
+#define NM_VPN_SSO_KEY_USERNAME     "username"
+#define NM_VPN_SSO_KEY_USERGROUP    "usergroup"
+#define NM_VPN_SSO_KEY_EXTRA_ARGS   "extra-args"
+#define NM_VPN_SSO_KEY_CACHE_HOURS  "cache-hours"
 
 /* Protocol types */
 #define NM_VPN_SSO_PROTOCOL_GP      "globalprotect"
@@ -69,7 +68,6 @@ struct _NmVpnSsoServicePrivate {
     char *usergroup;
     char *extra_args;
     gint cache_hours;
-    gboolean external_browser;
 
     /* SSO authentication */
     char *sso_cookie;
@@ -672,11 +670,6 @@ start_sso_authentication (NmVpnSsoService *self)
         g_ptr_array_add (argv, (gpointer) BUNDLED_GP_SAML_GUI);
         g_ptr_array_add (argv, (gpointer) "--portal");
         g_ptr_array_add (argv, (gpointer) priv->gateway);
-        /* Use external browser if configured (allows password manager integration) */
-        if (priv->external_browser) {
-            g_ptr_array_add (argv, (gpointer) "--external");
-            g_message ("Using external browser for SSO authentication");
-        }
         g_ptr_array_add (argv, (gpointer) "--");
         g_ptr_array_add (argv, (gpointer) "--protocol=gp");
     } else if (g_strcmp0 (priv->protocol, NM_VPN_SSO_PROTOCOL_AC) == 0) {
@@ -698,14 +691,8 @@ start_sso_authentication (NmVpnSsoService *self)
         g_ptr_array_add (argv, (gpointer) "--server");
         g_ptr_array_add (argv, (gpointer) priv->gateway);
         g_ptr_array_add (argv, (gpointer) "--authenticate");
-        /* Use external browser if configured (allows password manager integration) */
-        if (priv->external_browser) {
-            g_ptr_array_add (argv, (gpointer) "--external-browser");
-            g_message ("Using external browser for AnyConnect SSO authentication");
-        } else {
-            g_ptr_array_add (argv, (gpointer) "--browser-display-mode");
-            g_ptr_array_add (argv, (gpointer) "shown");
-        }
+        g_ptr_array_add (argv, (gpointer) "--browser-display-mode");
+        g_ptr_array_add (argv, (gpointer) "shown");
     } else {
         g_warning ("Unknown protocol: %s", priv->protocol);
         nm_vpn_service_plugin_failure (NM_VPN_SERVICE_PLUGIN (self),
@@ -1615,10 +1602,6 @@ real_connect (NMVpnServicePlugin *plugin,
     value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_CACHE_HOURS);
     if (value)
         priv->cache_hours = atoi (value);
-
-    value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_EXTERNAL_BROWSER);
-    priv->external_browser = (value && g_strcmp0 (value, "yes") == 0);
-    g_message ("External browser SSO: %s", priv->external_browser ? "enabled" : "disabled");
 
     return connect_to_vpn (self, error);
 }

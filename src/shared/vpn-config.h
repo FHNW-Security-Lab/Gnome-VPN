@@ -18,13 +18,12 @@ G_BEGIN_DECLS
 #define NM_DBUS_SERVICE_VPN_SSO "org.freedesktop.NetworkManager.vpn-sso"
 
 /* VPN data keys (stored in connection's vpn setting data) */
-#define NM_VPN_SSO_KEY_GATEWAY           "gateway"
-#define NM_VPN_SSO_KEY_PROTOCOL          "protocol"
-#define NM_VPN_SSO_KEY_USERNAME          "username"
-#define NM_VPN_SSO_KEY_USERGROUP         "usergroup"
-#define NM_VPN_SSO_KEY_EXTRA_ARGS        "extra-args"
-#define NM_VPN_SSO_KEY_CACHE_HOURS       "cache-hours"
-#define NM_VPN_SSO_KEY_EXTERNAL_BROWSER  "external-browser"
+#define NM_VPN_SSO_KEY_GATEWAY      "gateway"
+#define NM_VPN_SSO_KEY_PROTOCOL     "protocol"
+#define NM_VPN_SSO_KEY_USERNAME     "username"
+#define NM_VPN_SSO_KEY_USERGROUP    "usergroup"
+#define NM_VPN_SSO_KEY_EXTRA_ARGS   "extra-args"
+#define NM_VPN_SSO_KEY_CACHE_HOURS  "cache-hours"
 
 /* Protocol values */
 #define NM_VPN_SSO_PROTOCOL_GLOBALPROTECT "globalprotect"
