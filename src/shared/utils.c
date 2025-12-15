@@ -122,8 +122,9 @@ find_session_leader_pid (uid_t uid)
         };
 
         for (gint i = 0; session_procs[i]; i++) {
+            /* Use short options for pgrep portability (-U for real UID, -x for exact match) */
             g_autofree gchar *cmd = g_strdup_printf (
-                "pgrep --uid %u --exact %s 2>/dev/null | head -1",
+                "pgrep -U %u -x '%s' 2>/dev/null | head -1",
                 (unsigned int) uid, session_procs[i]);
 
             g_autofree gchar *output = NULL;
@@ -340,8 +341,9 @@ vpn_sso_get_graphical_session_env (void)
     /* Fallback for XAUTHORITY */
     if (!env->xauthority) {
         /* First, try to find Xwayland process and read XAUTHORITY from it
-         * (needed for Wayland sessions running XWayland) */
-        g_autofree gchar *pgrep_cmd = g_strdup_printf ("pgrep --uid %u Xwayland 2>/dev/null | head -1", (unsigned int) uid);
+         * (needed for Wayland sessions running XWayland)
+         * Use short option -U for portability */
+        g_autofree gchar *pgrep_cmd = g_strdup_printf ("pgrep -U %u Xwayland 2>/dev/null | head -1", (unsigned int) uid);
         g_autofree gchar *xwayland_pid_str = NULL;
 
         if (uid >= 1000 &&

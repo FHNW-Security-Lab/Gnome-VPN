@@ -180,6 +180,10 @@ credential_lookup_cb (GObject      *source,
     if (cached && cached->cookie && *cached->cookie) {
         g_message ("Found valid cached credentials for %s (%s) - skipping SSO",
                    priv->gateway, priv->protocol);
+        g_message ("  cached cookie length: %zu", strlen (cached->cookie));
+        g_message ("  cached fingerprint: %s", cached->fingerprint ? cached->fingerprint : "(null)");
+        g_message ("  cached username: %s", cached->username ? cached->username : "(null)");
+        g_message ("  cached usergroup: %s", cached->usergroup ? cached->usergroup : "(null)");
 
         /* Use cached credentials */
         g_free (priv->sso_cookie);
@@ -1126,9 +1130,12 @@ openconnect_child_watch_cb (GPid pid, gint status, gpointer user_data)
     /* Handle connection failure */
     if (priv->state == VPN_STATE_CONNECTED || priv->state == VPN_STATE_CONNECTING) {
         if (WIFEXITED (status) && WEXITSTATUS (status) != 0) {
+            gint exit_code = WEXITSTATUS (status);
+            g_warning ("OpenConnect failed with exit code %d", exit_code);
+
             /* OpenConnect failed - check if we should fallback to SSO */
             if (priv->using_cached_credentials) {
-                g_message ("Cached credentials failed - clearing cache and falling back to SSO");
+                g_message ("Cached credentials failed (exit code %d) - clearing cache and falling back to SSO", exit_code);
 
                 /* Clear invalid cached credentials */
                 vpn_sso_credential_cache_clear_async (priv->gateway, priv->protocol,
@@ -1164,7 +1171,13 @@ start_openconnect (NmVpnSsoService *self)
     gchar **envp;
     gint stdin_fd, stdout_fd, stderr_fd;
 
-    g_message ("Starting OpenConnect for gateway: %s", priv->gateway);
+    g_message ("Starting OpenConnect for gateway: %s (protocol: %s)", priv->gateway, priv->protocol);
+    g_message ("  cookie: %s (len=%zu)",
+               priv->sso_cookie ? "(present)" : "(null)",
+               priv->sso_cookie ? strlen (priv->sso_cookie) : 0);
+    g_message ("  fingerprint: %s",
+               priv->sso_fingerprint ? priv->sso_fingerprint : "(null)");
+    g_message ("  using_cached: %s", priv->using_cached_credentials ? "YES" : "NO");
 
     argv = g_ptr_array_new ();
 
@@ -1223,6 +1236,12 @@ start_openconnect (NmVpnSsoService *self)
     g_ptr_array_add (argv, (gpointer) priv->gateway);
     g_ptr_array_add (argv, NULL);
 
+    /* Log the command line for debugging */
+    {
+        g_autofree gchar *cmdline = g_strjoinv (" ", (gchar **) argv->pdata);
+        g_message ("OpenConnect command: %s", cmdline);
+    }
+
     /* Build environment - openconnect typically runs as root so doesn't
      * strictly need display env, but we build it anyway for consistency */
     envp = build_subprocess_environment (NULL);
@@ -1266,6 +1285,11 @@ start_openconnect (NmVpnSsoService *self)
     if (priv->sso_cookie) {
         gsize bytes_written;
         GError *write_error = NULL;
+        gsize cookie_len = strlen (priv->sso_cookie);
+
+        g_message ("Writing cookie to OpenConnect stdin (length=%zu, first 20 chars: %.20s...)",
+                   cookie_len, priv->sso_cookie);
+
         g_io_channel_write_chars (priv->openconnect_stdin,
                                  priv->sso_cookie,
                                  -1,
@@ -1277,6 +1301,12 @@ start_openconnect (NmVpnSsoService *self)
         } else {
             g_io_channel_write_chars (priv->openconnect_stdin, "\n", -1, &bytes_written, NULL);
             g_io_channel_flush (priv->openconnect_stdin, NULL);
+            g_message ("Cookie written to OpenConnect stdin successfully (%zu bytes)", cookie_len);
+
+            /* Close stdin to signal EOF - openconnect expects this */
+            g_io_channel_shutdown (priv->openconnect_stdin, TRUE, NULL);
+            g_io_channel_unref (priv->openconnect_stdin);
+            priv->openconnect_stdin = NULL;
         }
     }
 
@@ -1312,9 +1342,20 @@ cleanup_connection (NmVpnSsoService *self)
         kill (priv->sso_pid, SIGTERM);
     }
 
-    /* Kill OpenConnect process if running */
+    /* Disconnect OpenConnect process if running.
+     *
+     * IMPORTANT: We use SIGHUP instead of SIGTERM!
+     * - SIGTERM causes openconnect to log off the session, invalidating the cookie
+     * - SIGHUP disconnects but does NOT log off, preserving the session cookie
+     *   for reconnection (see openconnect(8) man page SIGNALS section)
+     *
+     * This allows the cached credentials to be reused for reconnection within
+     * the server's session timeout (typically 8-12 hours for AnyConnect).
+     */
     if (priv->openconnect_pid) {
-        kill (priv->openconnect_pid, SIGTERM);
+        g_message ("Sending SIGHUP to openconnect (PID %d) to preserve session cookie",
+                   priv->openconnect_pid);
+        kill (priv->openconnect_pid, SIGHUP);
     }
 
     /* Clean up SSO resources */
