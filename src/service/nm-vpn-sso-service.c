@@ -198,8 +198,13 @@ credential_lookup_cb (GObject      *source,
             priv->username = g_strdup (cached->username);
         }
 
-        if (cached->usergroup && !priv->usergroup) {
+        /* Always use cached usergroup - it contains the correct usergroup
+         * for the cached cookie type (e.g., portal:portal-userauthcookie)
+         */
+        if (cached->usergroup) {
+            g_free (priv->usergroup);
             priv->usergroup = g_strdup (cached->usergroup);
+            g_message ("Using cached usergroup: %s", priv->usergroup);
         }
 
         /* Mark that we're using cached credentials for fallback handling */
@@ -848,6 +853,50 @@ parse_openconnect_output (NmVpnSsoService *self, const gchar *buf)
         }
     }
 
+    /* Parse GlobalProtect portal-userauthcookie for session persistence.
+     * This cookie is returned AFTER successful login and is valid for hours,
+     * unlike the prelogin-cookie which expires in seconds/minutes.
+     * OpenConnect outputs: "GlobalProtect login returned portal-userauthcookie=XXX"
+     */
+    if (g_strcmp0 (priv->protocol, NM_VPN_SSO_PROTOCOL_GP) == 0) {
+        p = strstr (buf, "portal-userauthcookie=");
+        if (p) {
+            p += 22; /* Skip "portal-userauthcookie=" */
+            /* Find end of cookie (newline or end of string) */
+            const gchar *cookie_end = p;
+            while (*cookie_end && *cookie_end != '\n' && *cookie_end != '\r' && *cookie_end != ' ')
+                cookie_end++;
+
+            /* Only update if we got a real cookie (not "empty") */
+            if (cookie_end > p && g_ascii_strncasecmp (p, "empty", 5) != 0) {
+                gchar *new_cookie = g_strndup (p, cookie_end - p);
+
+                /* Check if this is different from what we have cached */
+                if (g_strcmp0 (priv->sso_cookie, new_cookie) != 0) {
+                    g_message ("Captured GlobalProtect portal-userauthcookie (length=%zu)",
+                               strlen (new_cookie));
+
+                    /* Update our stored cookie */
+                    g_free (priv->sso_cookie);
+                    priv->sso_cookie = new_cookie;
+
+                    /* Update the usergroup for portal-userauthcookie.
+                     * This is different from the prelogin-cookie usergroup.
+                     */
+                    g_free (priv->usergroup);
+                    priv->usergroup = g_strdup ("portal:portal-userauthcookie");
+                    g_message ("Updated usergroup to portal:portal-userauthcookie");
+
+                    /* Update the credential cache with this long-lived cookie */
+                    g_message ("Updating credential cache with portal-userauthcookie");
+                    store_credentials_in_cache (self);
+                } else {
+                    g_free (new_cookie);
+                }
+            }
+        }
+    }
+
     /* Parse DNS servers: OpenConnect outputs "Got DNS server address X.X.X.X"
      * We need to collect all DNS servers as there may be multiple
      */
@@ -1218,7 +1267,17 @@ start_openconnect (NmVpnSsoService *self)
         }
 
         if (priv->sso_cookie) {
-            g_ptr_array_add (argv, (gpointer) "--usergroup=portal:prelogin-cookie");
+            /* Use cached usergroup if available (e.g., portal:portal-userauthcookie),
+             * otherwise default to portal:prelogin-cookie for initial SSO auth.
+             */
+            if (priv->usergroup && *priv->usergroup) {
+                gchar *usergroup_arg = g_strdup_printf ("--usergroup=%s", priv->usergroup);
+                g_ptr_array_add (argv, (gpointer) usergroup_arg);
+                g_message ("Using usergroup: %s", priv->usergroup);
+            } else {
+                g_ptr_array_add (argv, (gpointer) "--usergroup=portal:prelogin-cookie");
+                g_message ("Using default usergroup: portal:prelogin-cookie");
+            }
             g_ptr_array_add (argv, (gpointer) "--passwd-on-stdin");
         }
     } else if (g_strcmp0 (priv->protocol, NM_VPN_SSO_PROTOCOL_AC) == 0) {
