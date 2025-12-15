@@ -229,7 +229,7 @@ vpn_sso_ac_authenticate_async (const gchar         *gateway,
     AcAuthData *data;
     g_autoptr(GError) error = NULL;
     g_autoptr(GSubprocessLauncher) launcher = NULL;
-    const gchar *argv[4];
+    const gchar *argv[8];
     gint argc = 0;
 
     g_return_if_fail (gateway != NULL);
@@ -260,9 +260,17 @@ vpn_sso_ac_authenticate_async (const gchar         *gateway,
     argv[argc++] = "openconnect-sso";
     argv[argc++] = "--server";
     argv[argc++] = gateway;
+    /* Pass username to pre-fill in SSO browser if available */
+    if (username && *username) {
+        argv[argc++] = "--user";
+        argv[argc++] = username;
+    }
     argv[argc] = NULL;
 
-    g_debug ("Spawning: %s --server %s", argv[0], gateway);
+    if (username && *username)
+        g_debug ("Spawning: %s --server %s --user %s", argv[0], gateway, username);
+    else
+        g_debug ("Spawning: %s --server %s", argv[0], gateway);
 
     /* Create subprocess launcher */
     launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_STDOUT_PIPE |

@@ -123,11 +123,12 @@ find_session_leader_pid (uid_t uid)
 
         for (gint i = 0; session_procs[i]; i++) {
             g_autofree gchar *cmd = g_strdup_printf (
-                "pgrep -u %d -x %s 2>/dev/null | head -1",
-                uid, session_procs[i]);
+                "pgrep --uid %u --exact %s 2>/dev/null | head -1",
+                (unsigned int) uid, session_procs[i]);
 
             g_autofree gchar *output = NULL;
-            if (g_spawn_command_line_sync (cmd, &output, NULL, NULL, NULL) &&
+            if (uid >= 1000 &&
+                g_spawn_command_line_sync (cmd, &output, NULL, NULL, NULL) &&
                 output && *output) {
                 pid = (pid_t) g_ascii_strtoll (g_strstrip (output), NULL, 10);
                 if (pid > 0) {
@@ -340,10 +341,11 @@ vpn_sso_get_graphical_session_env (void)
     if (!env->xauthority) {
         /* First, try to find Xwayland process and read XAUTHORITY from it
          * (needed for Wayland sessions running XWayland) */
-        g_autofree gchar *pgrep_cmd = g_strdup_printf ("pgrep -u %d Xwayland 2>/dev/null | head -1", uid);
+        g_autofree gchar *pgrep_cmd = g_strdup_printf ("pgrep --uid %u Xwayland 2>/dev/null | head -1", (unsigned int) uid);
         g_autofree gchar *xwayland_pid_str = NULL;
 
-        if (g_spawn_command_line_sync (pgrep_cmd, &xwayland_pid_str, NULL, NULL, NULL) &&
+        if (uid >= 1000 &&
+            g_spawn_command_line_sync (pgrep_cmd, &xwayland_pid_str, NULL, NULL, NULL) &&
             xwayland_pid_str && *xwayland_pid_str) {
             pid_t xwayland_pid = (pid_t) g_ascii_strtoll (g_strstrip (xwayland_pid_str), NULL, 10);
             if (xwayland_pid > 0) {

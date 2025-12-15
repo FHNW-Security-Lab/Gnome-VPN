@@ -7,6 +7,7 @@ service_sources = files(
   'gp-backend.c',
   'ac-backend.c',
   'openconnect-runner.c',
+  'credential-cache.c',
 )
 
 service_headers = files(
@@ -15,6 +16,7 @@ service_headers = files(
   'gp-backend.h',
   'ac-backend.h',
   'openconnect-runner.h',
+  'credential-cache.h',
 )
 
 executable(

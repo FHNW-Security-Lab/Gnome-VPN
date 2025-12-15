@@ -23,6 +23,7 @@ G_BEGIN_DECLS
 #define NM_VPN_SSO_KEY_USERNAME     "username"
 #define NM_VPN_SSO_KEY_USERGROUP    "usergroup"
 #define NM_VPN_SSO_KEY_EXTRA_ARGS   "extra-args"
+#define NM_VPN_SSO_KEY_CACHE_HOURS  "cache-hours"
 
 /* Protocol values */
 #define NM_VPN_SSO_PROTOCOL_GLOBALPROTECT "globalprotect"

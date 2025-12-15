@@ -31,6 +31,7 @@ struct _NmVpnSsoEditor {
     GtkWidget *gateway_entry;
     GtkWidget *protocol_combo;
     GtkWidget *username_entry;
+    GtkWidget *cache_hours_spin;
     GtkWidget *extra_args_entry;
 
     NMConnection *connection;
@@ -111,6 +112,27 @@ init_editor_ui (NmVpnSsoEditor *self)
     g_signal_connect (self->username_entry, "changed", G_CALLBACK (widget_changed_cb), self);
     row++;
 
+    /* Cache duration */
+    label = gtk_label_new ("Cache Duration:");
+    gtk_widget_set_halign (label, GTK_ALIGN_END);
+    gtk_grid_attach (GTK_GRID (grid), label, 0, row, 1, 1);
+
+    GtkWidget *cache_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+    self->cache_hours_spin = gtk_spin_button_new_with_range (0, 168, 1);  /* 0-168 hours (1 week) */
+    gtk_spin_button_set_value (GTK_SPIN_BUTTON (self->cache_hours_spin), 8);  /* Default 8 hours */
+    gtk_widget_set_tooltip_text (self->cache_hours_spin,
+        "How long to cache SSO credentials (0 = always require fresh SSO)");
+    gtk_box_append (GTK_BOX (cache_box), self->cache_hours_spin);
+
+    GtkWidget *hours_label = gtk_label_new ("hours");
+    gtk_widget_add_css_class (hours_label, "dim-label");
+    gtk_box_append (GTK_BOX (cache_box), hours_label);
+
+    gtk_widget_set_hexpand (cache_box, TRUE);
+    gtk_grid_attach (GTK_GRID (grid), cache_box, 1, row, 1, 1);
+    g_signal_connect (self->cache_hours_spin, "value-changed", G_CALLBACK (widget_changed_cb), self);
+    row++;
+
     /* Extra arguments */
     label = gtk_label_new ("Extra Arguments:");
     gtk_widget_set_halign (label, GTK_ALIGN_END);
@@ -126,7 +148,8 @@ init_editor_ui (NmVpnSsoEditor *self)
     /* Add help text */
     GtkWidget *help_label = gtk_label_new (
         "This VPN uses Single Sign-On (SSO) authentication.\n"
-        "A browser window will open when connecting.");
+        "A browser window will open when connecting.\n"
+        "Credentials are cached securely to allow quick reconnection.");
     gtk_widget_set_margin_top (help_label, 12);
     gtk_widget_add_css_class (help_label, "dim-label");
     gtk_box_append (GTK_BOX (self->widget), help_label);
@@ -163,6 +186,13 @@ load_connection_settings (NmVpnSsoEditor *self)
     value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_USERNAME);
     if (value)
         gtk_editable_set_text (GTK_EDITABLE (self->username_entry), value);
+
+    /* Load cache duration */
+    value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_CACHE_HOURS);
+    if (value)
+        gtk_spin_button_set_value (GTK_SPIN_BUTTON (self->cache_hours_spin), atoi (value));
+    else
+        gtk_spin_button_set_value (GTK_SPIN_BUTTON (self->cache_hours_spin), 8);  /* Default */
 
     /* Load extra arguments */
     value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_EXTRA_ARGS);
@@ -232,6 +262,15 @@ nm_vpn_sso_editor_update_connection (NMVpnEditor  *editor,
         nm_setting_vpn_add_data_item (s_vpn, NM_VPN_SSO_KEY_USERNAME, username);
     else
         nm_setting_vpn_remove_data_item (s_vpn, NM_VPN_SSO_KEY_USERNAME);
+
+    /* Get cache duration */
+    gint cache_hours = gtk_spin_button_get_value_as_int (GTK_SPIN_BUTTON (self->cache_hours_spin));
+    if (cache_hours > 0) {
+        g_autofree gchar *cache_str = g_strdup_printf ("%d", cache_hours);
+        nm_setting_vpn_add_data_item (s_vpn, NM_VPN_SSO_KEY_CACHE_HOURS, cache_str);
+    } else {
+        nm_setting_vpn_remove_data_item (s_vpn, NM_VPN_SSO_KEY_CACHE_HOURS);
+    }
 
     /* Get extra arguments (optional) */
     extra_args = gtk_editable_get_text (GTK_EDITABLE (self->extra_args_entry));

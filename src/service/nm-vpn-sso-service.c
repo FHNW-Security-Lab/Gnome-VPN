@@ -11,6 +11,7 @@
 
 #include "config.h"
 #include "nm-vpn-sso-service.h"
+#include "credential-cache.h"
 #include "utils.h"
 
 #include <stdlib.h>
@@ -34,6 +35,7 @@
 #define NM_VPN_SSO_KEY_USERNAME     "username"
 #define NM_VPN_SSO_KEY_USERGROUP    "usergroup"
 #define NM_VPN_SSO_KEY_EXTRA_ARGS   "extra-args"
+#define NM_VPN_SSO_KEY_CACHE_HOURS  "cache-hours"
 
 /* Protocol types */
 #define NM_VPN_SSO_PROTOCOL_GP      "globalprotect"
@@ -65,6 +67,7 @@ struct _NmVpnSsoServicePrivate {
     char *username;
     char *usergroup;
     char *extra_args;
+    gint cache_hours;
 
     /* SSO authentication */
     char *sso_cookie;
@@ -109,6 +112,98 @@ static void cleanup_connection (NmVpnSsoService *self);
 static void start_sso_authentication (NmVpnSsoService *self);
 static void start_openconnect (NmVpnSsoService *self);
 static gchar **build_subprocess_environment (SsoChildSetupData **out_setup_data);
+
+/*
+ * Credential cache callbacks
+ */
+static void
+credential_store_cb (GObject      *source,
+                     GAsyncResult *result,
+                     gpointer      user_data)
+{
+    g_autoptr(GError) error = NULL;
+
+    if (!vpn_sso_credential_cache_store_finish (result, &error)) {
+        g_warning ("Failed to store credentials in cache: %s", error->message);
+    } else {
+        g_message ("Credentials stored in secure cache");
+    }
+}
+
+static void
+store_credentials_in_cache (NmVpnSsoService *self)
+{
+    NmVpnSsoServicePrivate *priv = self->priv;
+
+    if (!priv->sso_cookie || !*priv->sso_cookie) {
+        g_debug ("No cookie to cache");
+        return;
+    }
+
+    g_message ("Storing SSO credentials in cache for %s (%s) - expires in %d hours",
+               priv->gateway, priv->protocol,
+               priv->cache_hours > 0 ? priv->cache_hours : VPN_SSO_DEFAULT_CACHE_DURATION_HOURS);
+
+    vpn_sso_credential_cache_store_async (priv->gateway,
+                                          priv->protocol,
+                                          priv->username,
+                                          priv->sso_cookie,
+                                          priv->sso_fingerprint,
+                                          priv->usergroup,
+                                          priv->cache_hours,
+                                          NULL, /* cancellable */
+                                          credential_store_cb,
+                                          self);
+}
+
+static void
+credential_lookup_cb (GObject      *source,
+                      GAsyncResult *result,
+                      gpointer      user_data)
+{
+    NmVpnSsoService *self = NM_VPN_SSO_SERVICE (user_data);
+    NmVpnSsoServicePrivate *priv = self->priv;
+    g_autoptr(GError) error = NULL;
+    g_autoptr(VpnSsoCachedCredential) cached = NULL;
+
+    cached = vpn_sso_credential_cache_lookup_finish (result, &error);
+
+    if (error) {
+        g_warning ("Cache lookup failed: %s - proceeding with SSO", error->message);
+        start_sso_authentication (self);
+        return;
+    }
+
+    if (cached && cached->cookie && *cached->cookie) {
+        g_message ("Found valid cached credentials for %s (%s) - skipping SSO",
+                   priv->gateway, priv->protocol);
+
+        /* Use cached credentials */
+        g_free (priv->sso_cookie);
+        priv->sso_cookie = g_strdup (cached->cookie);
+
+        if (cached->fingerprint) {
+            g_free (priv->sso_fingerprint);
+            priv->sso_fingerprint = g_strdup (cached->fingerprint);
+        }
+
+        if (cached->username && !priv->username) {
+            priv->username = g_strdup (cached->username);
+        }
+
+        if (cached->usergroup && !priv->usergroup) {
+            priv->usergroup = g_strdup (cached->usergroup);
+        }
+
+        /* Skip SSO and go directly to OpenConnect */
+        priv->state = VPN_STATE_CONNECTING;
+        start_openconnect (self);
+    } else {
+        g_message ("No valid cached credentials found for %s (%s) - starting SSO",
+                   priv->gateway, priv->protocol);
+        start_sso_authentication (self);
+    }
+}
 
 /*
  * SSO Authentication Handlers
@@ -298,6 +393,8 @@ sso_child_watch_cb (GPid pid, gint status, gpointer user_data)
 
             if (priv->sso_cookie) {
                 g_message ("AnyConnect SSO successful, starting OpenConnect with cookie");
+                /* Store credentials in cache for future connections */
+                store_credentials_in_cache (self);
                 priv->state = VPN_STATE_CONNECTING;
                 start_openconnect (self);
             } else {
@@ -322,6 +419,8 @@ sso_child_watch_cb (GPid pid, gint status, gpointer user_data)
 
             if (priv->sso_cookie) {
                 g_message ("SSO authentication successful, starting OpenConnect");
+                /* Store credentials in cache for future connections */
+                store_credentials_in_cache (self);
                 priv->state = VPN_STATE_CONNECTING;
                 start_openconnect (self);
             } else {
@@ -710,6 +809,54 @@ parse_openconnect_output (NmVpnSsoService *self, const gchar *buf)
             }
         }
     }
+
+    /* Parse DNS servers: OpenConnect outputs "Got DNS server address X.X.X.X"
+     * We need to collect all DNS servers as there may be multiple
+     */
+    p = buf;
+    while ((p = strstr (p, "DNS server")) != NULL) {
+        /* Look for the IP address after "address" */
+        const gchar *addr_start = strstr (p, "address ");
+        if (addr_start) {
+            addr_start += 8; /* Skip "address " */
+            /* Skip any whitespace */
+            while (*addr_start == ' ')
+                addr_start++;
+            if (*addr_start >= '0' && *addr_start <= '9') {
+                const gchar *addr_end = addr_start;
+                while ((*addr_end >= '0' && *addr_end <= '9') || *addr_end == '.')
+                    addr_end++;
+                gchar *dns_addr = g_strndup (addr_start, addr_end - addr_start);
+                /* Validate it looks like an IP (has 3 dots) */
+                gint dot_count = 0;
+                for (const gchar *c = dns_addr; *c; c++)
+                    if (*c == '.') dot_count++;
+                if (dot_count == 3) {
+                    /* Check if we already have this DNS server */
+                    gboolean already_have = FALSE;
+                    if (priv->ip4_dns) {
+                        for (guint i = 0; i < priv->ip4_dns->len; i++) {
+                            if (g_strcmp0 (g_ptr_array_index (priv->ip4_dns, i), dns_addr) == 0) {
+                                already_have = TRUE;
+                                break;
+                            }
+                        }
+                    }
+                    if (!already_have) {
+                        if (!priv->ip4_dns)
+                            priv->ip4_dns = g_ptr_array_new_with_free_func (g_free);
+                        g_ptr_array_add (priv->ip4_dns, dns_addr);
+                        g_message ("Detected VPN DNS server: %s", dns_addr);
+                    } else {
+                        g_free (dns_addr);
+                    }
+                } else {
+                    g_free (dns_addr);
+                }
+            }
+        }
+        p++; /* Move past current match to find more DNS servers */
+    }
 }
 
 static void
@@ -751,6 +898,24 @@ report_ip4_config (NmVpnSsoService *self)
         }
     } else {
         g_warning ("No gateway IP detected from OpenConnect output");
+    }
+
+    /* Include DNS servers from VPN */
+    if (priv->ip4_dns && priv->ip4_dns->len > 0) {
+        GVariantBuilder dns_builder;
+        g_variant_builder_init (&dns_builder, G_VARIANT_TYPE ("au"));
+        for (guint i = 0; i < priv->ip4_dns->len; i++) {
+            const gchar *dns_str = g_ptr_array_index (priv->ip4_dns, i);
+            struct in_addr addr;
+            if (inet_pton (AF_INET, dns_str, &addr) == 1) {
+                g_variant_builder_add (&dns_builder, "u", addr.s_addr);
+                g_message ("Reporting DNS server to NetworkManager: %s", dns_str);
+            }
+        }
+        g_variant_builder_add (&builder, "{sv}", "dns",
+                               g_variant_builder_end (&dns_builder));
+    } else {
+        g_warning ("No DNS servers detected from OpenConnect output");
     }
 
     GVariant *config = g_variant_builder_end (&builder);
@@ -1223,8 +1388,16 @@ connect_to_vpn (NmVpnSsoService *self, GError **error)
         return FALSE;
     }
 
-    /* Start SSO authentication */
-    start_sso_authentication (self);
+    /* Check for cached credentials before starting SSO authentication.
+     * If valid cached credentials exist, we can skip the browser-based
+     * SSO flow and connect directly. The callback will either use cached
+     * credentials or fall back to SSO authentication. */
+    g_message ("Checking for cached credentials...");
+    vpn_sso_credential_cache_lookup_async (priv->gateway,
+                                           priv->protocol,
+                                           NULL, /* cancellable */
+                                           credential_lookup_cb,
+                                           self);
 
     return TRUE;
 }
@@ -1272,6 +1445,10 @@ real_connect (NMVpnServicePlugin *plugin,
     value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_EXTRA_ARGS);
     if (value)
         priv->extra_args = g_strdup (value);
+
+    value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_CACHE_HOURS);
+    if (value)
+        priv->cache_hours = atoi (value);
 
     return connect_to_vpn (self, error);
 }

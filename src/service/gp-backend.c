@@ -229,7 +229,7 @@ vpn_sso_gp_authenticate_async (const gchar         *gateway,
     GpAuthData *data;
     g_autoptr(GError) error = NULL;
     g_autoptr(GSubprocessLauncher) launcher = NULL;
-    const gchar *argv[6];
+    const gchar *argv[10];
     gint argc = 0;
 
     g_return_if_fail (gateway != NULL);
@@ -257,11 +257,19 @@ vpn_sso_gp_authenticate_async (const gchar         *gateway,
     argv[argc++] = "gp-saml-gui";
     argv[argc++] = "--portal";
     argv[argc++] = gateway;
+    /* Pass username to pre-fill in SSO browser if available */
+    if (username && *username) {
+        argv[argc++] = "--user";
+        argv[argc++] = username;
+    }
     argv[argc++] = "--";
     argv[argc++] = "--protocol=gp";
     argv[argc] = NULL;
 
-    g_debug ("Spawning: %s --portal %s -- --protocol=gp", argv[0], gateway);
+    if (username && *username)
+        g_debug ("Spawning: %s --portal %s --user %s -- --protocol=gp", argv[0], gateway, username);
+    else
+        g_debug ("Spawning: %s --portal %s -- --protocol=gp", argv[0], gateway);
 
     /* Create subprocess launcher */
     launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_STDOUT_PIPE |
