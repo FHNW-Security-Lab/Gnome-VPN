@@ -6,10 +6,10 @@ pkgs.mkShell {
     pkgs.ninja
     pkgs.pkg-config
     pkgs.gcc
-    pkgs.libnm
+    pkgs.networkmanager.dev
     pkgs.gtk4
     pkgs.libadwaita
-    pkgs.webkitgtk
+    pkgs.webkitgtk_6_0
     pkgs.libsecret
     pkgs.openconnect
     pkgs.vpnc-scripts
