@@ -122,6 +122,11 @@ core
 core.*
 vgcore.*
 
+# Allow Python package directory named "core"
+!python/
+!python/core/
+!python/core/**
+
 # Temporary files
 *.tmp
 *.temp
