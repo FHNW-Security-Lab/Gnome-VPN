@@ -9,7 +9,7 @@
 , glib
 , libadwaita
 , libsecret
-, webkitgtk
+, webkitgtk_6_0
 , openconnect
 , vpnc-scripts
 , writeShellScriptBin
@@ -43,7 +43,7 @@ python3Packages.buildPythonApplication rec {
     glib
     libadwaita
     libsecret
-    webkitgtk
+    webkitgtk_6_0
     playwright-driver
   ];
 
