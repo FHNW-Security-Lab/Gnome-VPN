@@ -9,8 +9,9 @@ A NetworkManager VPN plugin that provides native GNOME integration for OpenConne
 ## Features
 
 - **Native GNOME Integration** - Appears directly in GNOME Settings alongside OpenVPN, WireGuard, and other VPN types
-- **Single Sign-On Support** - Browser-based SAML/OAuth authentication flows
+- **Single Sign-On Support** - Browser-based SAML/OAuth authentication flows via Playwright
 - **Multi-Protocol Support** - Works with both GlobalProtect and AnyConnect VPNs
+- **Heuristic Login Automation** - Robust detection of username/password/OTP prompts
 - **Visual Feedback** - Connection status visible in GNOME's network indicator
 - **Profile Management** - Create and manage multiple VPN profiles
 - **Enterprise Ready** - Built for corporate VPN environments with SSO requirements
@@ -23,15 +24,12 @@ A NetworkManager VPN plugin that provides native GNOME integration for OpenConne
 ## Supported VPN Protocols
 
 ### GlobalProtect (Palo Alto Networks)
-Powered by [gp-saml-gui](https://github.com/dlenski/gp-saml-gui) by Daniel Lenski
 - SAML-based authentication
 - Portal and gateway discovery
 - Prelogin cookie handling
 
 ### AnyConnect (Cisco)
-Powered by [openconnect-sso](https://github.com/vlaci/openconnect-sso) by László Vaskó
 - OAuth/SAML authentication
-- OIDC support
 - Multi-factor authentication
 
 Both protocols use OpenConnect for the actual VPN tunnel establishment.
@@ -43,7 +41,8 @@ Both protocols use OpenConnect for the actual VPN tunnel establishment.
 #### Ubuntu 22.04+ / Debian 12+
 ```bash
 sudo apt update
-sudo apt install networkmanager openconnect
+sudo apt install networkmanager openconnect python3-playwright python3-pyotp
+PLAYWRIGHT_BROWSERS_PATH=/var/cache/ms-playwright python3 -m playwright install chromium
 ```
 
 ### Option 1: Install from .deb Package
@@ -70,7 +69,7 @@ sudo systemctl restart NetworkManager
 sudo apt install meson ninja-build gcc \
     libnm-dev libgtk-4-dev libadwaita-1-dev \
     libwebkitgtk-6.0-dev libsecret-1-dev \
-    python3-dev python3-pip python3-gi \
+    python3-dev python3-pip python3-gi python3-playwright python3-pyotp \
     gir1.2-gtk-4.0 openconnect git
 ```
 
@@ -79,7 +78,7 @@ sudo apt install meson ninja-build gcc \
 sudo dnf install meson ninja-build gcc \
     NetworkManager-libnm-devel gtk4-devel libadwaita-devel \
     webkitgtk6.0-devel libsecret-devel \
-    python3-devel python3-pip python3-gobject \
+    python3-devel python3-pip python3-gobject python3-playwright python3-pyotp \
     openconnect git
 ```
 
@@ -116,6 +115,37 @@ sudo systemctl restart NetworkManager
 ```bash
 ./package-deb.sh
 # Output: gnome-vpn-sso_<version>_amd64.deb
+
+### Advanced options
+
+- Force headless auth (no UI):
+  ```bash
+  nmcli connection modify "My VPN" vpn.data.headless true
+  ```
+
+### Nix / NixOS
+
+#### Development shell
+```bash
+nix-shell
+```
+
+#### Package build
+```bash
+nix build .#gnome-vpn-sso
+```
+
+#### NixOS module
+```nix
+{
+  imports = [ ./nix/nixos-module.nix ];
+
+  services.gnome-vpn-sso.enable = true;
+}
+```
+
+This module also sets a tmpfiles rule for Playwright browsers at
+`/var/cache/ms-playwright`.
 ```
 
 ## Quick Start
@@ -218,19 +248,21 @@ VPN profiles are stored by NetworkManager in:
 
 ### SSO Browser Window Doesn't Open
 
-1. Check if required Python packages are installed:
+1. Verify Playwright is installed and Chromium is present:
    ```bash
-   # For GlobalProtect
-   gp-saml-gui --help
-
-   # For AnyConnect
-   openconnect-sso --help
+   python3 -m playwright --version
+   PLAYWRIGHT_BROWSERS_PATH=/var/cache/ms-playwright python3 -m playwright install chromium
    ```
 
-2. Verify GTK/WebKit libraries:
+2. Ensure the browser cache path is writable by the service:
    ```bash
-   python3 -c "import gi; gi.require_version('Gtk', '3.0'); gi.require_version('WebKit2', '4.1')"
+   sudo mkdir -p /var/cache/ms-playwright /var/cache/gnome-vpn-sso
+   sudo chmod 755 /var/cache/ms-playwright /var/cache/gnome-vpn-sso
    ```
+
+3. If you saved Password/TOTP, the SSO flow runs headless.
+   - To force a visible browser window: `nmcli connection modify <NAME> +vpn.data headless=false`
+   - Or clear secrets in the VPN editor.
 
 ### Authentication Succeeds but Tunnel Fails
 
@@ -355,13 +387,9 @@ GNU General Public License for more details.
 
 This project builds upon the excellent work of:
 
-- **[gp-saml-gui](https://github.com/dlenski/gp-saml-gui)** by Daniel Lenski
-  - SAML GUI for GlobalProtect VPN authentication
-  - Licensed under GPL-3.0
-
-- **[openconnect-sso](https://github.com/vlaci/openconnect-sso)** by László Vaskó
-  - SSO wrapper for OpenConnect supporting AnyConnect
-  - Licensed under GPL-3.0
+- **[Playwright](https://playwright.dev/)** by Microsoft
+  - Cross-browser automation used for SAML flows
+  - Licensed under Apache-2.0
 
 - **[OpenConnect](https://www.infradead.org/openconnect/)** by David Woodhouse and contributors
   - Open-source VPN client supporting multiple protocols

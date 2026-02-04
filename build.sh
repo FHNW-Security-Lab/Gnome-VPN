@@ -122,6 +122,8 @@ install_build_deps() {
         "python3-pip"
         "python3-gi"
         "python3-setuptools"
+        "python3-playwright"
+        "python3-pyotp"
         "gir1.2-gtk-4.0"
         "gir1.2-adw-1"
         "gir1.2-nm-1.0"
@@ -147,39 +149,18 @@ install_build_deps() {
 
 # Download SSO dependencies
 download_sso_deps() {
-    print_info "Downloading SSO dependencies..."
+    print_info "Preparing Playwright browser dependencies..."
 
-    # Create deps directory if it doesn't exist
-    mkdir -p "$DEPS_DIR"
-    cd "$DEPS_DIR"
-
-    # Download gp-saml-gui
-    print_info "Downloading gp-saml-gui..."
-    if [ -d "gp-saml-gui" ]; then
-        print_warning "gp-saml-gui directory already exists, removing..."
-        rm -rf "gp-saml-gui"
+    if ! python3 -c "import playwright" &>/dev/null; then
+        print_warning "Python playwright not installed. Skipping browser download."
+        print_info "Install with: pip3 install playwright  (or your distro package)"
+        return 0
     fi
 
-    wget -O gp-saml-gui-master.zip https://github.com/dlenski/gp-saml-gui/archive/master.zip
-    unzip -q gp-saml-gui-master.zip
-    mv gp-saml-gui-master gp-saml-gui
-    rm gp-saml-gui-master.zip
-    print_success "gp-saml-gui downloaded successfully"
-
-    # Clone openconnect-sso
-    print_info "Cloning openconnect-sso..."
-    if [ -d "openconnect-sso" ]; then
-        print_warning "openconnect-sso directory already exists, updating..."
-        cd openconnect-sso
-        git pull
-        cd ..
-    else
-        git clone https://github.com/vlaci/openconnect-sso.git
-        print_success "openconnect-sso cloned successfully"
-    fi
-
-    cd ..
-    print_success "All SSO dependencies downloaded to $DEPS_DIR/"
+    export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/cache/ms-playwright}"
+    print_info "Installing Chromium to $PLAYWRIGHT_BROWSERS_PATH"
+    python3 -m playwright install chromium || \
+        print_warning "Playwright browser install failed. You can run it manually later."
 }
 
 # ============================================================================
@@ -256,7 +237,7 @@ $PROJECT_NAME Build Script v$PROJECT_VERSION
 Usage: $0 [OPTIONS]
 
 OPTIONS:
-    --deps-only              Download SSO dependencies only (gp-saml-gui, openconnect-sso)
+    --deps-only              Download Playwright browser dependencies
     --install-build-deps     Install system build dependencies via apt
     --clean                  Clean the build directory
     --install                Build and install the project
@@ -285,7 +266,7 @@ DEPENDENCIES:
                      libadwaita-1-dev, libsecret-1-dev, python3-dev,
                      python3-pip, python3-gi, openconnect, git, wget, unzip
 
-    External deps: gp-saml-gui, openconnect-sso (downloaded with --deps-only)
+    External deps: Playwright browser runtime (downloaded with --deps-only)
 
 EOF
 }

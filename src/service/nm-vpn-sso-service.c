@@ -36,14 +36,16 @@
 #define NM_VPN_SSO_KEY_USERGROUP    "usergroup"
 #define NM_VPN_SSO_KEY_EXTRA_ARGS   "extra-args"
 #define NM_VPN_SSO_KEY_CACHE_HOURS  "cache-hours"
+#define NM_VPN_SSO_KEY_HEADLESS     "headless"
+#define NM_VPN_SSO_SECRET_PASSWORD  "password"
+#define NM_VPN_SSO_SECRET_TOTP      "totp-secret"
 
 /* Protocol types */
 #define NM_VPN_SSO_PROTOCOL_GP      "globalprotect"
 #define NM_VPN_SSO_PROTOCOL_AC      "anyconnect"
 
-/* Bundled SSO tool paths - use absolute paths to avoid conflicts with user installations */
-#define BUNDLED_GP_SAML_GUI         "/opt/gnome-vpn-sso/bin/gp-saml-gui"
-#define BUNDLED_OPENCONNECT_SSO     "/opt/gnome-vpn-sso/bin/openconnect-sso"
+/* Bundled Python SSO helper */
+#define BUNDLED_PY_SSO              VPN_SSO_LIBEXECDIR "/gnome-vpn-sso/vpn-sso-auth"
 
 /* Process watch interval (ms) */
 #define PROCESS_WATCH_INTERVAL 1000
@@ -68,6 +70,8 @@ struct _NmVpnSsoServicePrivate {
     char *usergroup;
     char *extra_args;
     gint cache_hours;
+    gboolean headless;
+    gboolean headless_set;
 
     /* SSO authentication */
     char *sso_cookie;
@@ -104,6 +108,10 @@ struct _NmVpnSsoServicePrivate {
 
     /* Cached credential tracking for fallback to SSO */
     gboolean using_cached_credentials;
+
+    /* Optional secrets for headless SSO */
+    char *password;
+    char *totp_secret;
 };
 
 G_DEFINE_TYPE_WITH_PRIVATE (NmVpnSsoService, nm_vpn_sso_service, NM_TYPE_VPN_SERVICE_PLUGIN)
@@ -303,6 +311,34 @@ parse_sso_cookie (NmVpnSsoService *self, const char *output)
 {
     NmVpnSsoServicePrivate *priv = self->priv;
     const char *cookie_start, *cookie_end;
+
+    /* First, try generic KEY=VALUE output (vpn-sso-auth). */
+    {
+        char **lines = g_strsplit (output, "\n", -1);
+        for (int i = 0; lines[i]; i++) {
+            char *line = g_strstrip (lines[i]);
+            if (g_str_has_prefix (line, "COOKIE=")) {
+                g_free (priv->sso_cookie);
+                priv->sso_cookie = g_strdup (line + 7);
+            } else if (g_str_has_prefix (line, "FINGERPRINT=")) {
+                g_free (priv->sso_fingerprint);
+                priv->sso_fingerprint = g_strdup (line + 12);
+            } else if (g_str_has_prefix (line, "USERGROUP=")) {
+                g_free (priv->usergroup);
+                priv->usergroup = g_strdup (line + 10);
+            } else if (g_str_has_prefix (line, "USERNAME=")) {
+                if (!priv->username || !*priv->username) {
+                    g_free (priv->username);
+                    priv->username = g_strdup (line + 9);
+                }
+            }
+        }
+        g_strfreev (lines);
+    }
+
+    if (priv->sso_cookie) {
+        return;
+    }
 
     /* For GlobalProtect, gp-saml-gui outputs credentials in this format:
      * HOST=https://vpn.example.com/globalprotect
@@ -629,15 +665,17 @@ build_subprocess_environment (SsoChildSetupData **out_setup_data)
     /* Build PATH with our bundled tools directory first */
     path = g_getenv ("PATH");
     if (path)
-        new_path = g_strdup_printf ("/opt/gnome-vpn-sso/bin:%s", path);
+        new_path = g_strdup_printf ("%s/gnome-vpn-sso:%s", VPN_SSO_LIBEXECDIR, path);
     else
-        new_path = g_strdup ("/opt/gnome-vpn-sso/bin:/usr/local/bin:/usr/bin:/bin");
+        new_path = g_strdup_printf ("%s/gnome-vpn-sso:/usr/local/bin:/usr/bin:/bin", VPN_SSO_LIBEXECDIR);
 
     g_ptr_array_add (env_array, g_strdup_printf ("PATH=%s", new_path));
 
     /* Add some standard environment variables that Python/Qt might need */
     g_ptr_array_add (env_array, g_strdup ("QT_QPA_PLATFORM=xcb"));
     g_ptr_array_add (env_array, g_strdup ("GDK_BACKEND=x11"));
+    if (!g_getenv ("PLAYWRIGHT_BROWSERS_PATH"))
+        g_ptr_array_add (env_array, g_strdup ("PLAYWRIGHT_BROWSERS_PATH=/var/cache/ms-playwright"));
 
     /* Null-terminate the array */
     g_ptr_array_add (env_array, NULL);
@@ -665,34 +703,25 @@ start_sso_authentication (NmVpnSsoService *self)
     priv->sso_output = g_string_new ("");
     argv = g_ptr_array_new ();
 
-    if (g_strcmp0 (priv->protocol, NM_VPN_SSO_PROTOCOL_GP) == 0) {
-        /* GlobalProtect: use bundled gp-saml-gui with absolute path */
-        g_ptr_array_add (argv, (gpointer) BUNDLED_GP_SAML_GUI);
-        g_ptr_array_add (argv, (gpointer) "--portal");
+    if (g_strcmp0 (priv->protocol, NM_VPN_SSO_PROTOCOL_GP) == 0 ||
+        g_strcmp0 (priv->protocol, NM_VPN_SSO_PROTOCOL_AC) == 0) {
+        g_ptr_array_add (argv, (gpointer) BUNDLED_PY_SSO);
+        g_ptr_array_add (argv, (gpointer) "--protocol");
+        g_ptr_array_add (argv, (gpointer) priv->protocol);
+        g_ptr_array_add (argv, (gpointer) "--gateway");
         g_ptr_array_add (argv, (gpointer) priv->gateway);
-        g_ptr_array_add (argv, (gpointer) "--");
-        g_ptr_array_add (argv, (gpointer) "--protocol=gp");
-    } else if (g_strcmp0 (priv->protocol, NM_VPN_SSO_PROTOCOL_AC) == 0) {
-        /* AnyConnect: use bundled openconnect-sso with absolute path
-         *
-         * NOTE: We intentionally do NOT pass --user here, even if username is configured.
-         * Passing --user triggers openconnect-sso to prompt for password via getpass(),
-         * which fails when running as a service (no TTY). For pure SSO authentication,
-         * the user is identified through the browser-based SSO flow.
-         *
-         * We use --authenticate to get credentials only - openconnect-sso will print
-         * the cookie/credentials and exit without trying to run openconnect itself.
-         * Our service then uses these credentials to establish the VPN connection.
-         *
-         * We also force --browser-display-mode=shown to ensure the SSO browser window
-         * appears for the user to complete authentication.
-         */
-        g_ptr_array_add (argv, (gpointer) BUNDLED_OPENCONNECT_SSO);
-        g_ptr_array_add (argv, (gpointer) "--server");
-        g_ptr_array_add (argv, (gpointer) priv->gateway);
-        g_ptr_array_add (argv, (gpointer) "--authenticate");
-        g_ptr_array_add (argv, (gpointer) "--browser-display-mode");
-        g_ptr_array_add (argv, (gpointer) "shown");
+        if (priv->username && *priv->username) {
+            g_ptr_array_add (argv, (gpointer) "--username");
+            g_ptr_array_add (argv, (gpointer) priv->username);
+        }
+        if (priv->headless_set) {
+            g_ptr_array_add (argv, (gpointer) (priv->headless ? "--headless" : "--headful"));
+        } else if (priv->headless) {
+            g_ptr_array_add (argv, (gpointer) "--headless");
+        }
+        if (g_getenv ("VPN_SSO_DEBUG")) {
+            g_ptr_array_add (argv, (gpointer) "--debug");
+        }
     } else {
         g_warning ("Unknown protocol: %s", priv->protocol);
         nm_vpn_service_plugin_failure (NM_VPN_SERVICE_PLUGIN (self),
@@ -707,6 +736,19 @@ start_sso_authentication (NmVpnSsoService *self)
      * for dropping privileges (Qt WebEngine refuses to run as root) */
     SsoChildSetupData *setup_data = NULL;
     envp = build_subprocess_environment (&setup_data);
+    if (envp) {
+        GPtrArray *env_array = g_ptr_array_new_with_free_func (g_free);
+        for (gint i = 0; envp[i]; i++)
+            g_ptr_array_add (env_array, g_strdup (envp[i]));
+        if (priv->password && *priv->password)
+            g_ptr_array_add (env_array, g_strdup_printf ("VPN_SSO_PASSWORD=%s", priv->password));
+        if (priv->totp_secret && *priv->totp_secret)
+            g_ptr_array_add (env_array, g_strdup_printf ("VPN_SSO_TOTP_SECRET=%s", priv->totp_secret));
+        g_ptr_array_add (env_array, g_strdup ("PYTHONUNBUFFERED=1"));
+        g_ptr_array_add (env_array, NULL);
+        g_strfreev (envp);
+        envp = (gchar **) g_ptr_array_free (env_array, FALSE);
+    }
     if (!envp) {
         g_warning ("Failed to build subprocess environment - GUI may not work");
         /* Continue anyway, some systems might work without explicit env */
@@ -1503,6 +1545,8 @@ cleanup_connection (NmVpnSsoService *self)
     /* Clean up configuration */
     g_clear_pointer (&priv->sso_cookie, g_free);
     g_clear_pointer (&priv->sso_fingerprint, g_free);
+    g_clear_pointer (&priv->password, g_free);
+    g_clear_pointer (&priv->totp_secret, g_free);
     g_clear_pointer (&priv->tundev, g_free);
     g_clear_pointer (&priv->ip4_address, g_free);
     g_clear_pointer (&priv->ip4_netmask, g_free);
@@ -1578,6 +1622,12 @@ real_connect (NMVpnServicePlugin *plugin,
         return FALSE;
     }
 
+    /* Clear previous optional secrets */
+    g_clear_pointer (&priv->password, g_free);
+    g_clear_pointer (&priv->totp_secret, g_free);
+    priv->headless = FALSE;
+    priv->headless_set = FALSE;
+
     /* Extract connection settings */
     value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_GATEWAY);
     if (value)
@@ -1602,6 +1652,26 @@ real_connect (NMVpnServicePlugin *plugin,
     value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_CACHE_HOURS);
     if (value)
         priv->cache_hours = atoi (value);
+
+    /* Optional secrets for headless SSO */
+    value = nm_setting_vpn_get_secret (s_vpn, NM_VPN_SSO_SECRET_PASSWORD);
+    if (value)
+        priv->password = g_strdup (value);
+
+    value = nm_setting_vpn_get_secret (s_vpn, NM_VPN_SSO_SECRET_TOTP);
+    if (value)
+        priv->totp_secret = g_strdup (value);
+
+    value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_HEADLESS);
+    if (value) {
+        priv->headless_set = TRUE;
+        if (g_ascii_strcasecmp (value, "true") == 0 || g_strcmp0 (value, "1") == 0)
+            priv->headless = TRUE;
+        else if (g_ascii_strcasecmp (value, "false") == 0 || g_strcmp0 (value, "0") == 0)
+            priv->headless = FALSE;
+    } else if (priv->password || priv->totp_secret) {
+        priv->headless = TRUE;
+    }
 
     return connect_to_vpn (self, error);
 }
@@ -1663,6 +1733,8 @@ finalize (GObject *object)
     g_free (priv->username);
     g_free (priv->usergroup);
     g_free (priv->extra_args);
+    g_free (priv->password);
+    g_free (priv->totp_secret);
 
     g_message ("VPN SSO service finalized");
 

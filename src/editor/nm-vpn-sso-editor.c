@@ -31,6 +31,8 @@ struct _NmVpnSsoEditor {
     GtkWidget *gateway_entry;
     GtkWidget *protocol_combo;
     GtkWidget *username_entry;
+    GtkWidget *password_entry;
+    GtkWidget *totp_entry;
     GtkWidget *cache_hours_spin;
     GtkWidget *extra_args_entry;
 
@@ -112,6 +114,33 @@ init_editor_ui (NmVpnSsoEditor *self)
     g_signal_connect (self->username_entry, "changed", G_CALLBACK (widget_changed_cb), self);
     row++;
 
+    /* Password (optional, stored in keyring) */
+    label = gtk_label_new ("Password:");
+    gtk_widget_set_halign (label, GTK_ALIGN_END);
+    gtk_grid_attach (GTK_GRID (grid), label, 0, row, 1, 1);
+
+    self->password_entry = gtk_entry_new ();
+    gtk_widget_set_hexpand (self->password_entry, TRUE);
+    gtk_entry_set_placeholder_text (GTK_ENTRY (self->password_entry), "Optional (stored in keyring)");
+    gtk_entry_set_visibility (GTK_ENTRY (self->password_entry), FALSE);
+    gtk_entry_set_input_purpose (GTK_ENTRY (self->password_entry), GTK_INPUT_PURPOSE_PASSWORD);
+    gtk_grid_attach (GTK_GRID (grid), self->password_entry, 1, row, 1, 1);
+    g_signal_connect (self->password_entry, "changed", G_CALLBACK (widget_changed_cb), self);
+    row++;
+
+    /* TOTP Secret (optional) */
+    label = gtk_label_new ("TOTP Secret:");
+    gtk_widget_set_halign (label, GTK_ALIGN_END);
+    gtk_grid_attach (GTK_GRID (grid), label, 0, row, 1, 1);
+
+    self->totp_entry = gtk_entry_new ();
+    gtk_widget_set_hexpand (self->totp_entry, TRUE);
+    gtk_entry_set_placeholder_text (GTK_ENTRY (self->totp_entry), "Base32 secret (optional)");
+    gtk_entry_set_visibility (GTK_ENTRY (self->totp_entry), FALSE);
+    gtk_grid_attach (GTK_GRID (grid), self->totp_entry, 1, row, 1, 1);
+    g_signal_connect (self->totp_entry, "changed", G_CALLBACK (widget_changed_cb), self);
+    row++;
+
     /* Cache duration */
     label = gtk_label_new ("Cache Duration:");
     gtk_widget_set_halign (label, GTK_ALIGN_END);
@@ -149,6 +178,7 @@ init_editor_ui (NmVpnSsoEditor *self)
     GtkWidget *help_label = gtk_label_new (
         "This VPN uses Single Sign-On (SSO) authentication.\n"
         "A browser window will open when connecting.\n"
+        "If password/TOTP are set, authentication runs headless.\n"
         "Credentials are cached securely to allow quick reconnection.");
     gtk_widget_set_margin_top (help_label, 12);
     gtk_widget_add_css_class (help_label, "dim-label");
@@ -187,6 +217,15 @@ load_connection_settings (NmVpnSsoEditor *self)
     if (value)
         gtk_editable_set_text (GTK_EDITABLE (self->username_entry), value);
 
+    /* Load secrets if available */
+    value = nm_setting_vpn_get_secret (s_vpn, NM_VPN_SSO_SECRET_PASSWORD);
+    if (value)
+        gtk_editable_set_text (GTK_EDITABLE (self->password_entry), value);
+
+    value = nm_setting_vpn_get_secret (s_vpn, NM_VPN_SSO_SECRET_TOTP);
+    if (value)
+        gtk_editable_set_text (GTK_EDITABLE (self->totp_entry), value);
+
     /* Load cache duration */
     value = nm_setting_vpn_get_data_item (s_vpn, NM_VPN_SSO_KEY_CACHE_HOURS);
     if (value)
@@ -219,6 +258,8 @@ nm_vpn_sso_editor_update_connection (NMVpnEditor  *editor,
     NMSettingVpn *s_vpn;
     const char *gateway;
     const char *username;
+    const char *password;
+    const char *totp_secret;
     const char *extra_args;
     const char *protocol;
     guint selected;
@@ -262,6 +303,30 @@ nm_vpn_sso_editor_update_connection (NMVpnEditor  *editor,
         nm_setting_vpn_add_data_item (s_vpn, NM_VPN_SSO_KEY_USERNAME, username);
     else
         nm_setting_vpn_remove_data_item (s_vpn, NM_VPN_SSO_KEY_USERNAME);
+
+    /* Password (optional, stored as secret) */
+    password = gtk_editable_get_text (GTK_EDITABLE (self->password_entry));
+    if (password && *password)
+        nm_setting_vpn_add_secret (s_vpn, NM_VPN_SSO_SECRET_PASSWORD, password);
+    else
+        nm_setting_vpn_remove_secret (s_vpn, NM_VPN_SSO_SECRET_PASSWORD);
+
+    /* TOTP secret (optional, stored as secret) */
+    totp_secret = gtk_editable_get_text (GTK_EDITABLE (self->totp_entry));
+    if (totp_secret && *totp_secret)
+        nm_setting_vpn_add_secret (s_vpn, NM_VPN_SSO_SECRET_TOTP, totp_secret);
+    else
+        nm_setting_vpn_remove_secret (s_vpn, NM_VPN_SSO_SECRET_TOTP);
+
+    /* Store secrets in keyring when available */
+    nm_setting_set_secret_flags (NM_SETTING (s_vpn),
+                                 NM_VPN_SSO_SECRET_PASSWORD,
+                                 NM_SETTING_SECRET_FLAG_NONE,
+                                 NULL);
+    nm_setting_set_secret_flags (NM_SETTING (s_vpn),
+                                 NM_VPN_SSO_SECRET_TOTP,
+                                 NM_SETTING_SECRET_FLAG_NONE,
+                                 NULL);
 
     /* Get cache duration */
     gint cache_hours = gtk_spin_button_get_value_as_int (GTK_SPIN_BUTTON (self->cache_hours_spin));

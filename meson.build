@@ -45,6 +45,7 @@ config_h.set_quoted('GETTEXT_PACKAGE', meson.project_name())
 config_h.set_quoted('LOCALEDIR', localedir)
 config_h.set_quoted('NM_VPN_DIR', nm_vpn_dir)
 config_h.set_quoted('NM_PLUGINDIR', nm_plugindir)
+config_h.set_quoted('VPN_SSO_LIBEXECDIR', libexecdir)
 
 configure_file(
   output: 'config.h',
@@ -70,6 +71,7 @@ libsecret_dep = dependency('libsecret-1', version: libsecret_req_version)
 
 # Subdirectories
 subdir('src')
+subdir('python')
 subdir('data')
 
 # Check for po directory

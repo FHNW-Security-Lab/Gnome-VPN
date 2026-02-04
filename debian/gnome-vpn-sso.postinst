@@ -5,8 +5,13 @@ set -e
 
 case "$1" in
     configure)
-        # All SSO tools are bundled in /opt/gnome-vpn-sso
-        # No pip installs needed at runtime
+        # Ensure Playwright browser runtime is present (Chromium)
+        if python3 -c "import playwright" >/dev/null 2>&1; then
+            PLAYWRIGHT_BROWSERS_PATH="/var/cache/ms-playwright"
+            export PLAYWRIGHT_BROWSERS_PATH
+            mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" || true
+            python3 -m playwright install chromium || true
+        fi
 
         # Reload DBus configuration
         if [ -x /bin/systemctl ]; then

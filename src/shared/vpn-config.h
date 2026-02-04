@@ -24,6 +24,10 @@ G_BEGIN_DECLS
 #define NM_VPN_SSO_KEY_USERGROUP    "usergroup"
 #define NM_VPN_SSO_KEY_EXTRA_ARGS   "extra-args"
 #define NM_VPN_SSO_KEY_CACHE_HOURS  "cache-hours"
+#define NM_VPN_SSO_KEY_HEADLESS     "headless"
+/* VPN secret keys (stored in connection's vpn secrets) */
+#define NM_VPN_SSO_SECRET_PASSWORD  "password"
+#define NM_VPN_SSO_SECRET_TOTP      "totp-secret"
 
 /* Protocol values */
 #define NM_VPN_SSO_PROTOCOL_GLOBALPROTECT "globalprotect"
